@@ -181,6 +181,60 @@
     }
     return (data.text || '').trim();
   };
+  // Streaming companion used by the chat UI. Falls back to the regular AI
+  // endpoint when the Netlify streaming runtime is unavailable.
+  TN.ai.stream = async function ({ system = '', messages = [], prompt, maxTokens = 1500, temperature = 0.4, onChunk = () => {} }) {
+    const input = messages.length ? messages : [{ role: 'user', content: String(prompt || '') }];
+    if (!input.some(m => String(m.content || '').trim())) throw new Error('Please enter a message first.');
+    // Bring-your-own-key modes do not use the server-side streaming proxy.
+    const cfg = TN.ai.cfg();
+    if (cfg.mode !== 'server' && cfg.key) {
+      const answer = await TN.ai.ask({ system, messages: input, maxTokens, temperature });
+      onChunk(answer, answer);
+      return answer;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 35000);
+    let response, full = '';
+    try {
+      response = await fetch('/.netlify/functions/ai-stream', {
+        method: 'POST', headers: { 'content-type': 'application/json', 'accept': 'text/event-stream' },
+        body: JSON.stringify({ system, messages: input.slice(-12).map(m => ({ role: m.role, content: String(m.content || '').slice(-12000) })), maxTokens: Math.min(maxTokens, 2500), temperature }),
+        signal: controller.signal
+      });
+      if (!response.ok || !response.body) {
+        const detail = await response.json().catch(() => ({}));
+        if ([404, 501, 502, 503].includes(response.status)) {
+          const answer = await TN.ai.ask({ system, messages: input, maxTokens, temperature });
+          onChunk(answer, answer); return answer;
+        }
+        throw new Error(detail.error || 'AI streaming request failed (' + response.status + ').');
+      }
+      const reader = response.body.getReader(), decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const part = await reader.read();
+        if (part.done) break;
+        buffer += decoder.decode(part.value, { stream: true });
+        const events = buffer.split(/\r?\n\r?\n/); buffer = events.pop() || '';
+        for (const event of events) {
+          const line = event.split(/\r?\n/).find(x => x.startsWith('data:'));
+          if (!line) continue;
+          const raw = line.slice(5).trim();
+          if (!raw || raw === '[DONE]') continue;
+          let item; try { item = JSON.parse(raw); } catch (_) { continue; }
+          if (item.error) throw new Error(item.error);
+          if (item.text) { full += item.text; onChunk(item.text, full); }
+        }
+      }
+      if (!full.trim()) throw new Error('The AI returned an empty answer. Please try again.');
+      return full.trim();
+    } catch (err) {
+      if (err && err.name === 'AbortError') throw new Error('AI request took too long. Please try again with a shorter message.');
+      throw err;
+    } finally { clearTimeout(timer); }
+  };
+
   function aiErr(status, msg) {
     if (status === 429) return 'Free-tier limit reached. Wait a minute and try again.';
     if (status === 401 || status === 403) return 'The AI key was rejected. Check it in Settings (⚙).';
