@@ -247,15 +247,17 @@
         const img = await env.textImage(lines, { fam: o.fam, bold: o.bold, italic: o.italic, size: o.size, color: o.color, lineH: lh, align: o.align, width: Math.max(o.maxW || 0, ...lines.map(l => wOf(l))), hs }); report.imageText++;
         const embedded = await doc.embedPng(img.png), x0 = o.x0 ?? o.x, top = (o.base0 ?? (o.y + o.size)) - o.size * 0.95; const bl = map(x0, top + img.h / img.scale); page.drawImage(embedded, { x: bl[0], y: bl[1], width: img.w / img.scale, height: img.h / img.scale, rotate: PL.degrees(rot) }); return;
       }
-      const font = await getFont(o.fam, o.bold, o.italic), col = PL.rgb(...C.hex(o.color, [0, 0, 0]));
+      const font = await getFont(o.fam, o.bold, o.italic), key = page.node.newFontDictionary(font.name, font.ref), col = PL.rgb(...C.hex(o.color, [0, 0, 0])), rad = rot * Math.PI / 180;
       const boxW = o.maxW || Math.max(...lines.map(wOf)), left = o.x0 ?? o.x;
       lines.forEach((ln, i) => {
         if (!ln) return; const w = wOf(ln); let x = left; if (o.align === 'center') x = left + (boxW - w) / 2; else if (o.align === 'right') x = left + boxW - w;
         const p = map(x, (o.base0 ?? (o.y + o.size)) + i * lh);
-        // Use pdf-lib's public drawing API so the font resource and text operators
-        // are attached to the page content stream reliably in every export.
-        page.drawText(ln, { x: p[0], y: p[1], size: o.size, font, color: col, rotate: PL.degrees(rot) });
-        if (o.underline) { const y0 = (o.base0 ?? (o.y + o.size)) + i * lh + o.size * 0.12, a = map(x, y0), q = map(x + w, y0); page.drawLine({ start: { x: a[0], y: a[1] }, end: { x: q[0], y: q[1] }, thickness: Math.max(0.6, o.size / 18), color: col }); }
+        // IMPORTANT: getContentStream() returns a detached content stream in pdf-lib.
+        // Appending operators to it does not attach them to the page, so exported text
+        // silently disappears. pushOperators() appends them to the page's real Contents.
+        const ops = [PL.pushGraphicsState(), PL.beginText(), PL.setFillingColor(col), PL.setFontAndSize(key, o.size)]; if (Math.abs(hs - 1) > 0.002) ops.push(PL.setCharacterSqueeze(hs * 100));
+        ops.push(PL.rotateAndSkewTextRadiansAndTranslate(rad, 0, 0, p[0], p[1]), PL.showText(font.encodeText(ln)), PL.endText(), PL.popGraphicsState()); page.pushOperators(...ops);
+        if (o.underline) { const q = map(x + w, (o.base0 ?? (o.y + o.size)) + i * lh + o.size * 0.12); page.drawLine({ start: { x: map(x, (o.base0 ?? (o.y + o.size)) + i * lh + o.size * 0.12)[0], y: map(x, (o.base0 ?? (o.y + o.size)) + i * lh + o.size * 0.12)[1] }, end: { x: q[0], y: q[1] }, thickness: Math.max(0.6, o.size / 18), color: col }); }
       });
     }
 
