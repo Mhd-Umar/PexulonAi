@@ -3,17 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>ToolNest — free tools that run in your browser</title>
-<meta name="description" content="Free PDF editor, image tools, calculators, converters, electronics and developer tools. No sign-up. Your files never leave your device.">
-<meta name="theme-color" content="#0b7a66">
+<title>ToolNest — a simpler workspace for everyday tools</title>
+<meta name="description" content="A clean workspace for PDF editing, AI assistance, image tools, calculators, converters and developer utilities. Use tools directly in your browser.">
+<meta name="theme-color" content="#f5f6f4">
+<meta name="color-scheme" content="light dark">
+<meta name="application-name" content="ToolNest">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
+<a class="skip-link" href="#app">Skip to tools</a>
 <header class="topbar" id="topbar"></header>
-<main id="app"><div class="wrap"><p style="padding:40px 0;color:var(--ink-3)">Loading…</p></div></main>
+<main id="app" aria-live="polite" tabindex="-1"><div class="wrap"><p style="padding:40px 0;color:var(--ink-3)">Preparing your workspace…</p></div></main>
 <footer id="footer"></footer>
 <noscript><div class="wrap"><p>ToolNest needs JavaScript to run its tools.</p></div></noscript>
 <script src="js/config.js"></script>
