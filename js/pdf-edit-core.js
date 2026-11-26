@@ -203,16 +203,19 @@
     async function applyObjs(page, e) {
       const map = C.vpToPdf(e.view, e.rot), rot = ((e.rot % 360) + 360) % 360, rect = (x, y, w, h) => { const a = map(x, y), b = map(x + w, y + h); return { x: Math.min(a[0], b[0]), y: Math.min(a[1], b[1]), w: Math.abs(a[0] - b[0]), h: Math.abs(a[1] - b[1]) }; };
       const rgbc = hx => PL.rgb(...C.hex(hx));
-      // pass 1: text edits (remove original, then draw)
+      // pass 1: replace real PDF text. Never hide a failed replacement behind
+      // a raster patch: abort the export rather than create a misleading blank edit.
       for (const o of e.objs.filter(o => o.type === 'edit')) {
-        let coveredNeeded = true;
-        if (env.removeText && o.items && o.items.length) {
-          const targets = o.items.map(it => { const a = map(it.x, it.y); return { str: it.str, x: a[0], y: a[1], w: it.w, fs: it.fs, rot }; });
-          try { const r = env.removeText(PL, doc, page, targets, { rot }); if (r && r.removed === targets.length) { coveredNeeded = false; report.removed++; } else report.covered++; } catch (err) { report.covered++; }
-        } else report.covered++;
-        if (coveredNeeded && env.coverImage && o.items && o.items.length) { const ci = await env.coverImage(o, e); if (ci) { const emb = await doc.embedPng(ci.png), bl = map(ci.x, ci.y + ci.h); page.drawImage(emb, { x: bl[0], y: bl[1], width: ci.w, height: ci.h, rotate: PL.degrees(rot) }); } else if (o.bg) { const r = rect(o.x - 1, o.y - 1, o.w + 2, o.h + 2); page.drawRectangle({ x: r.x, y: r.y, width: r.w, height: r.h, color: rgbc(o.bg), borderWidth: 0 }); } }
-        else if (coveredNeeded && o.bg) { const r = rect(o.x - 1, o.y - 1, o.w + 2, o.h + 2); page.drawRectangle({ x: r.x, y: r.y, width: r.w, height: r.h, color: rgbc(o.bg), borderWidth: 0 }); }
-        else if (o.bg && o.forceCover) { const r = rect(o.x - 1, o.y - 1, o.w + 2, o.h + 2); page.drawRectangle({ x: r.x, y: r.y, width: r.w, height: r.h, color: rgbc(o.bg), borderWidth: 0 }); }
+        if (env.rasterEdits) throw new Error('Raster text replacement is disabled. Reload the editor and try again.');
+        if (!env.removeText || !o.items || !o.items.length) throw new Error('This text is not a replaceable PDF text object. It may be part of a scanned image.');
+        const targets = o.items.map(it => { const a = map(it.x, it.y); return { str: it.str, x: a[0], y: a[1], w: it.w, fs: it.fs, rot }; });
+        let result;
+        try { result = env.removeText(PL, doc, page, targets, { rot }); }
+        catch (err) { throw new Error('Could not safely remove the original PDF text: ' + (err && err.message ? err.message : 'unknown error')); }
+        if (!result || result.removed !== targets.length) {
+          throw new Error('Could not safely replace all original text runs. No edited PDF was downloaded; please select a smaller text block.');
+        }
+        report.removed++;
         await drawTextBlock(page, e, o, map, rot, true);
       }
       for (const o of e.objs) {
@@ -242,7 +245,7 @@
       if (!lines.length || !lines.join('').trim()) return;
       const encodable = lines.every(l => metrics.canEncode(l, o.fam, o.bold, o.italic));
       const lh = o.lineH || o.size * 1.2, hs = o.hs || 1, wOf = s => { const x = metrics.width(s, o.fam, o.bold, o.italic, o.size); return (isNaN(x) ? s.length * o.size * 0.55 : x) * hs; };
-      if (!encodable) {
+      if (!encodable || (isEdit && env.rasterEdits)) {
         if (!env.textImage) throw new Error('This text contains characters the standard PDF fonts cannot draw.');
         const img = await env.textImage(lines, { fam: o.fam, bold: o.bold, italic: o.italic, size: o.size, color: o.color, lineH: lh, align: o.align, width: Math.max(o.maxW || 0, ...lines.map(l => wOf(l))), hs }); report.imageText++;
         const embedded = await doc.embedPng(img.png), x0 = o.x0 ?? o.x, top = (o.base0 ?? (o.y + o.size)) - o.size * 0.95; const bl = map(x0, top + img.h / img.scale); page.drawImage(embedded, { x: bl[0], y: bl[1], width: img.w / img.scale, height: img.h / img.scale, rotate: PL.degrees(rot) }); return;
@@ -252,9 +255,8 @@
       lines.forEach((ln, i) => {
         if (!ln) return; const w = wOf(ln); let x = left; if (o.align === 'center') x = left + (boxW - w) / 2; else if (o.align === 'right') x = left + boxW - w;
         const p = map(x, (o.base0 ?? (o.y + o.size)) + i * lh);
-        // IMPORTANT: getContentStream() returns a detached content stream in pdf-lib.
-        // Appending operators to it does not attach them to the page, so exported text
-        // silently disappears. pushOperators() appends them to the page's real Contents.
+        // Push operators onto the page's actual Contents stream. getContentStream()
+        // only creates a detached stream and can silently omit newly drawn text.
         const ops = [PL.pushGraphicsState(), PL.beginText(), PL.setFillingColor(col), PL.setFontAndSize(key, o.size)]; if (Math.abs(hs - 1) > 0.002) ops.push(PL.setCharacterSqueeze(hs * 100));
         ops.push(PL.rotateAndSkewTextRadiansAndTranslate(rad, 0, 0, p[0], p[1]), PL.showText(font.encodeText(ln)), PL.endText(), PL.popGraphicsState()); page.pushOperators(...ops);
         if (o.underline) { const q = map(x + w, (o.base0 ?? (o.y + o.size)) + i * lh + o.size * 0.12); page.drawLine({ start: { x: map(x, (o.base0 ?? (o.y + o.size)) + i * lh + o.size * 0.12)[0], y: map(x, (o.base0 ?? (o.y + o.size)) + i * lh + o.size * 0.12)[1] }, end: { x: q[0], y: q[1] }, thickness: Math.max(0.6, o.size / 18), color: col }); }
