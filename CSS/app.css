@@ -310,3 +310,38 @@ h1, h2, h3 { font-weight: 700; }
 .aimsg.assistant a { overflow-wrap: anywhere; }
 .aimsg .ai-msg-actions { display: flex; gap: 6px; }
 .aichat + textarea, .aichat ~ textarea { width: 100%; }
+
+/* ── ToolNest refined minimal / professional theme ── */
+:root {
+  --bg: #f6f8fb; --surface: #ffffff; --surface-2: #eef2f7;
+  --line: #e2e8f0; --line-strong: #cbd5e1;
+  --ink: #111827; --ink-2: #475569; --ink-3: #64748b;
+  --accent: #0f766e; --accent-ink: #ffffff; --accent-soft: #dff5f1;
+  --accent-2: #d6a84b;
+  --grad: linear-gradient(135deg, #0f766e, #155e75);
+  --radius: 14px; --radius-sm: 9px;
+  --shadow: 0 1px 2px rgba(15,23,42,.04), 0 8px 24px -16px rgba(15,23,42,.22);
+}
+:root[data-theme="dark"] {
+  --bg: #0b1220; --surface: #111c2d; --surface-2: #17263a;
+  --line: #26364b; --line-strong: #3b5069;
+  --ink: #edf3f8; --ink-2: #bdcad8; --ink-3: #8ea1b5;
+  --accent: #4fd1c5; --accent-ink: #08201e; --accent-soft: #153c3b;
+  --accent-2: #e4bd68; --grad: linear-gradient(135deg, #0f766e, #155e75);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0b1220; --surface: #111c2d; --surface-2: #17263a;
+    --line: #26364b; --line-strong: #3b5069;
+    --ink: #edf3f8; --ink-2: #bdcad8; --ink-3: #8ea1b5;
+    --accent: #4fd1c5; --accent-ink: #08201e; --accent-soft: #153c3b;
+    --accent-2: #e4bd68; --grad: linear-gradient(135deg, #0f766e, #155e75);
+  }
+}
+.topbar { background: color-mix(in srgb, var(--surface) 92%, transparent); }
+.brand-mark { border-radius: 8px; }
+.tcard, .panel, .searchbox input, .icon-btn { box-shadow: 0 1px 2px rgba(15,23,42,.035); }
+.tcard { border-radius: 13px; }
+.tcard:hover { transform: translateY(-1px); }
+button, .btn, .chip { transition: background-color .16s ease, border-color .16s ease, transform .16s ease; }
+.btn.primary, button.primary { background: var(--accent); }
