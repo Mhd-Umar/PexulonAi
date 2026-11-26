@@ -114,14 +114,30 @@
         }
         const lines = Core.groupLines(items), blocks = Core.groupBlocks(lines); e.text = { lines, blocks, cls };
       }
-      function sample(e, b) { // text colour + background colour from the rendered canvas
-        const c = e.canvas; if (!c) return { color: '#000000', bg: '#ffffff' }; const k = e.csc || 1, x = Math.max(0, Math.floor((b.x0 - 1) * k)), y = Math.max(0, Math.floor(b.top * k)), w = Math.min(c.width - x, Math.ceil((b.x1 - b.x0 + 2) * k)), hh = Math.min(c.height - y, Math.ceil((b.bottom - b.top) * k)); if (w < 1 || hh < 1) return { color: '#000000', bg: '#ffffff' };
-        let d; try { d = c.getContext('2d').getImageData(x, y, w, hh).data; } catch (_) { return { color: '#000000', bg: '#ffffff' }; }
-        const cnt = new Map(); for (let i = 0; i < d.length; i += 4) { const key = ((d[i] >> 3) << 10) | ((d[i + 1] >> 3) << 5) | (d[i + 2] >> 3); cnt.set(key, (cnt.get(key) || 0) + 1); }
-        let bk = 0, bn = -1; cnt.forEach((n, key) => { if (n > bn) { bn = n; bk = key; } }); const bg = [((bk >> 10) & 31) * 8 + 4, ((bk >> 5) & 31) * 8 + 4, (bk & 31) * 8 + 4];
-        let far = null, fd = 0; for (let i = 0; i < d.length; i += 4) { const dist = Math.abs(d[i] - bg[0]) + Math.abs(d[i + 1] - bg[1]) + Math.abs(d[i + 2] - bg[2]); if (dist > fd) { fd = dist; far = [d[i], d[i + 1], d[i + 2]]; } }
+      function sample(e, b) { // estimate ink from text pixels and page colour from the surrounding margin
+        const c = e.canvas; if (!c) return { color: '#000000', bg: '#ffffff' };
+        const k = e.csc || 1, x = Math.max(1, Math.floor((b.x0 - 1) * k)), y = Math.max(1, Math.floor(b.top * k));
+        const w = Math.min(c.width - x - 1, Math.ceil((b.x1 - b.x0 + 2) * k)), hh = Math.min(c.height - y - 1, Math.ceil((b.bottom - b.top) * k));
+        if (w < 1 || hh < 1) return { color: '#000000', bg: '#ffffff' };
+        const ctx = c.getContext('2d'); let inkData, edge = [];
+        try {
+          inkData = ctx.getImageData(x, y, w, hh).data;
+          const add = (ix, iy, iw, ih) => { if (iw > 0 && ih > 0) { const d = ctx.getImageData(ix, iy, iw, ih).data; for (let j = 0; j < d.length; j += 4) edge.push([d[j], d[j + 1], d[j + 2]]); } };
+          const band = Math.max(1, Math.min(4, Math.round(k * 1.5)));
+          add(x, Math.max(0, y - band), w, Math.min(band, y));
+          add(x, Math.min(c.height - band, y + hh), w, band);
+          add(Math.max(0, x - band), y, Math.min(band, x), hh);
+          add(Math.min(c.width - band, x + w), y, band, hh);
+        } catch (_) { return { color: '#000000', bg: '#ffffff' }; }
+        if (!edge.length) return { color: '#000000', bg: '#ffffff' };
+        const avg = [0, 1, 2].map(ch => edge.reduce((sum, v) => sum + v[ch], 0) / edge.length);
         const hx = a => '#' + a.map(v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
-        const snap = a => a.map(v => v >= 244 ? 255 : v); return { color: far && fd > 90 ? hx(far) : '#000000', bg: bn / (d.length / 4) > 0.3 ? hx(snap(bg)) : '#ffffff' };
+        let far = null, fd = 0;
+        for (let i = 0; i < inkData.length; i += 4) {
+          const d = Math.abs(inkData[i] - avg[0]) + Math.abs(inkData[i + 1] - avg[1]) + Math.abs(inkData[i + 2] - avg[2]);
+          if (d > fd) { fd = d; far = [inkData[i], inkData[i + 1], inkData[i + 2]]; }
+        }
+        return { color: far && fd > 75 ? hx(far) : '#111111', bg: hx(avg) };
       }
 
       /* ───────── objects ───────── */
@@ -148,19 +164,36 @@
         const c = e.canvas; if (!c || !o.items) return null; const k = e.csc || 1, x0 = Math.max(4, Math.floor((o.x - 1) * k)), y0 = Math.max(0, Math.floor((o.y - 1) * k)), w = Math.min(c.width - x0 - 4, Math.ceil((o.w + 2) * k)), hh = Math.min(c.height - y0, Math.ceil((o.h + 2) * k)); if (w < 2 || hh < 2) return null;
         let L, R; try { const g = c.getContext('2d'); L = g.getImageData(x0 - 4, y0, 1, hh).data; R = g.getImageData(Math.min(c.width - 1, x0 + w + 3), y0, 1, hh).data; } catch (_) { return null; }
         const out = h('canvas'); out.width = w; out.height = hh; const g2 = out.getContext('2d'); const col = (a, r) => [a[r * 4], a[r * 4 + 1], a[r * 4 + 2]], dist = (p, q) => Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1]) + Math.abs(p[2] - q[2]);
-        // Sample a narrow band on both sides (not a fixed white rectangle). Interpolate
-        // between edge colours for each scanline so tinted pages, coloured panels and gradients survive.
-        const image = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
-        const edge = (x, y) => { const vals = [0, 1, 2].map(dx => { const i = (y * c.width + Math.max(0, Math.min(c.width - 1, x + dx))) * 4; return [image[i], image[i + 1], image[i + 2]]; }); return [0, 1, 2].map(ch => vals.map(v => v[ch]).sort((u, v) => u - v)[1]); };
+        const image = g2.createImageData(w, hh), px = image.data;
         for (let r = 0; r < hh; r++) {
-          const yy = Math.max(0, Math.min(c.height - 1, y0 + r)), a = edge(x0 - 4, yy), b = edge(Math.min(c.width - 3, x0 + w + 1), yy);
-          for (let xx = 0; xx < w; xx++) { const t = w > 1 ? xx / (w - 1) : 0, rgb = a.map((v, ch) => Math.round(v * (1 - t) + b[ch] * t)); g2.fillStyle = 'rgb(' + rgb.join(',') + ')'; g2.fillRect(xx, r, 1, 1); }
+          const a = col(L, r), b = col(R, r);
+          for (let x = 0; x < w; x++) {
+            const t = w > 1 ? x / (w - 1) : 0.5, q = (r * w + x) * 4;
+            // Blend both neighbouring edges across the covered text strip. This preserves
+            // smooth colour gradients better than painting one flat colour per scanline.
+            px[q] = Math.round(a[0] * (1 - t) + b[0] * t);
+            px[q + 1] = Math.round(a[1] * (1 - t) + b[1] * t);
+            px[q + 2] = Math.round(a[2] * (1 - t) + b[2] * t); px[q + 3] = 255;
+          }
         }
+        g2.putImageData(image, 0, 0);
         return out;
       }
       async function coverImage(o, e) {
-        const pc = patchCanvas(e, o); if (!pc) return null; const blob = await new Promise(r => pc.toBlob(r, 'image/png')); const k = e.csc || 1;
-        return { png: new Uint8Array(await blob.arrayBuffer()), x: Math.max(4, Math.floor((o.x - 1) * k)) / k, y: Math.max(0, Math.floor((o.y - 1) * k)) / k, w: pc.width / k, h: pc.height / k };
+        // Re-render the source page at print-like resolution for the cover patch. The on-screen
+        // preview may be low-DPI; reusing it made edited lines look visibly pixelated in exports.
+        let source = e, tempCanvas = null;
+        try {
+          if (e.src != null && S.pdf) {
+            const page = await S.pdf.getPage(e.src + 1), scale = Math.min(4, 5000 / Math.max(e.w, e.h));
+            const vp = page.getViewport({ scale, rotation: e.rot }), c = h('canvas'); c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
+            await page.render({ canvas: c, viewport: vp }).promise; tempCanvas = c; source = Object.assign({}, e, { canvas: c, csc: c.width / e.w });
+          }
+        } catch (_) { source = e; }
+        const pc = patchCanvas(source, o); if (!pc) return null; const blob = await new Promise(r => pc.toBlob(r, 'image/png')); const k = source.csc || 1;
+        const result = { png: new Uint8Array(await blob.arrayBuffer()), x: Math.max(4, Math.floor((o.x - 1) * k)) / k, y: Math.max(0, Math.floor((o.y - 1) * k)) / k, w: pc.width / k, h: pc.height / k };
+        if (tempCanvas) { tempCanvas.width = 1; tempCanvas.height = 1; }
+        return result;
       }
       function bbox(o) {
         if (o.type === 'line' || o.type === 'arrow') { const x = Math.min(o.x1, o.x2), y = Math.min(o.y1, o.y2); return { x: x - 6, y: y - 6, w: Math.abs(o.x2 - o.x1) + 12, h: Math.abs(o.y2 - o.y1) + 12 }; }
@@ -254,7 +287,7 @@
           kids.push(lbl('Colour'), colorIn(o ? (o.stroke || o.color) : st.stroke, v => setStyle('stroke', v), 'Colour'), lbl('Width'), numIn(o ? (o.sw ?? 2) : st.sw, v => setStyle('sw', v), 0.5, 30, 0.5));
           if (t === 'rect' || t === 'ellipse') kids.push(lbl('Fill'), h('select', { onchange: ev => setStyle('fill', ev.target.value) }, [['', 'None'], ['#ffffff', 'White'], ['#fff3a3', 'Yellow'], ['#c8f7c5', 'Green'], ['#ffd1dc', 'Pink'], ['#cfe3ff', 'Blue'], ['#000000', 'Black']].map(([v, n]) => h('option', { value: v, selected: (o ? o.fill || '' : st.fill) === v }, n))));
         } else if (t === 'highlight') kids.push(lbl('Colour'), ...['#ffeb3b', '#8bf28b', '#ff9ecb', '#7fd1ff', '#ffb347'].map(c => h('button', { class: 'tbtn', type: 'button', style: { minWidth: '34px', height: '34px', background: c, borderColor: (o ? o.color : st.hl) === c ? 'var(--accent)' : 'var(--line)' }, onclick: () => setStyle('hl', c), 'aria-label': 'Highlight colour' })));
-        else if (t === 'whiteout') kids.push(lbl('Colour'), colorIn(o ? o.color : st.wo, v => setStyle('wo', v), 'Cover colour'), h('span', { class: 'muted' }, 'Choose a matching colour for tinted or dark page backgrounds.'));
+        else if (t === 'whiteout') kids.push(lbl('Colour'), colorIn(o ? o.color : st.wo, v => setStyle('wo', v), 'Cover colour'), h('span', { class: 'muted' }, 'Tip: tap 🎨 not needed — pick the page colour if it is not white.'));
         else if (t === 'redact') kids.push(h('span', { class: 'muted' }, 'Redaction removes the text underneath for real (not just hidden). Check the result.'));
         else if (t === 'link') kids.push(h('span', { class: 'muted' }, 'After you drag, you will be asked for a web address or a page number.'));
         else kids.push(h('span', { class: 'muted' }, 'Choose a tool above. Tap 👆 Select to move or resize things.'));
@@ -320,7 +353,7 @@
       /* ───────── inline text editor ───────── */
       function openEditor(e, o) {
         closeEditor(); const pe = pageEls.get(e.id); if (!pe) return; const z = S.z, ww = o.maxW || Math.max(120, o.w, e.w - o.x0 - 6);
-        const ta = h('textarea', { class: 'ped-editor', spellcheck: 'true', rows: Math.max(1, (o.text.match(/\n/g) || []).length + 1), style: { left: (o.x0 - 3) * z + 'px', top: (o.base0 - o.size * CSS_BASE - 3) * z + 'px', width: Math.max(ww * z + 12, 90) + 'px', fontFamily: Core.CSSFONT[o.fam], fontSize: o.size * z + 'px', lineHeight: o.lineH * z + 'px', fontWeight: Core.resolveStyle(o.fam, o.bold, o.italic).includes('b') ? 700 : 400, fontStyle: Core.resolveStyle(o.fam, o.bold, o.italic).includes('i') ? 'italic' : 'normal', color: o.color, textAlign: o.align, resize: 'none', overflow: 'hidden' } });
+        const ta = h('textarea', { class: 'ped-editor', spellcheck: 'true', rows: Math.max(1, (o.text.match(/\n/g) || []).length + 1), style: { left: (o.x0 - 3) * z + 'px', top: (o.base0 - o.size * CSS_BASE - 3) * z + 'px', width: Math.max(ww * z + 12, 90) + 'px', fontFamily: Core.CSSFONT[o.fam], fontSize: o.size * z + 'px', lineHeight: o.lineH * z + 'px', fontWeight: Core.resolveStyle(o.fam, o.bold, o.italic).includes('b') ? 700 : 400, fontStyle: Core.resolveStyle(o.fam, o.bold, o.italic).includes('i') ? 'italic' : 'normal', color: o.color || '#111111', background: o.bg || '#ffffff', '--ped-bg': o.bg || '#ffffff', '--ped-ink': o.color || '#111111', textAlign: o.align, resize: 'none', overflow: 'hidden' } });
         ta.value = o.text; const fit = () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; }; ta.addEventListener('input', fit);
         ta.addEventListener('keydown', ev => { if (ev.key === 'Escape') { ev.preventDefault(); closeEditor(true); } else if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); closeEditor(); } });
         ta.addEventListener('blur', () => setTimeout(() => { if (editing && editing.ta === ta) closeEditor(); }, 120));
@@ -405,23 +438,12 @@
         const blob = await new Promise(r => c.toBlob(r, 'image/png')); return { png: new Uint8Array(await blob.arrayBuffer()), w: c.width, h: c.height, scale: sc };
       }
       async function exportPdf() {
-        if (!S.pdf) { ui.toast('Open a PDF first'); return; } closeEditor(); dl.disabled = true; fab.disabled = true; const old = dl.textContent; dl.textContent = 'Saving…'; status.textContent = 'Preparing pages and background…';
+        if (!S.pdf) { ui.toast('Open a PDF first'); return; } closeEditor(); dl.disabled = true; fab.disabled = true; const old = dl.textContent; dl.textContent = 'Saving…'; status.textContent = 'Building your PDF…';
         try {
-          // The editor renders pages lazily. Force-render every page containing a text edit
-          // before making its background patch, otherwise an off-screen page can export blank.
-          const edited = live().filter(e => e.src != null && e.objs.some(o => o.type === 'edit'));
-          for (const e of edited) {
-            const pe = pageEls.get(e.id);
-            if (pe && !e.canvas) { pe.done = false; renderCanvas(e.id); await renderQ; }
-            if (!e.canvas) throw new Error('Could not render page ' + (e.src + 1) + ' for text replacement. Scroll to that page and try again.');
-          }
-          status.textContent = 'Building your PDF…';
           await Promise.all(live().flatMap(e => e.objs.filter(TEXTY).map(o => ensureFont(o.fam, o.bold, o.italic))));
           const entries = live().map(e => ({ src: e.src, w: e.w, h: e.h, view: e.view, rot: e.rot, baseRot: e.baseRot, deleted: false, objs: e.objs.map(o => { const c = Object.assign({}, o); if (TEXTY(c)) { c.lines = o.lines; } return c; }) }));
-          const out = await Core.exportDoc(S.PL, S.bytes, entries, S.assets, { metrics: S.metrics, textImage, coverImage, fontBytes: async (f, b, i) => fontBytes.get(f + '|' + Core.resolveStyle(f, b, i)), removeText: Core.removeTextFactory(S.metrics), rasterEdits: true });
-          const pdfBytes = out instanceof Uint8Array ? out.slice() : new Uint8Array(out);
-          if (pdfBytes.length < 100 || String.fromCharCode(...pdfBytes.subarray(0, 5)) !== '%PDF-') throw new Error('The generated file is incomplete. No download was started; please try saving again.');
-          const blob = new Blob([pdfBytes], { type: 'application/pdf' }); ui.download(blob, S.name + '-edited.pdf'); S.dirty = false; const r = out.report || {};
+          const out = await Core.exportDoc(S.PL, S.bytes, entries, S.assets, { metrics: S.metrics, textImage, coverImage, fontBytes: async (f, b, i) => fontBytes.get(f + '|' + Core.resolveStyle(f, b, i)), removeText: Core.removeTextFactory(S.metrics) });
+          const blob = new Blob([out], { type: 'application/pdf' }); ui.download(blob, S.name + '-edited.pdf'); S.dirty = false; const r = out.report || {};
           const parts = []; if (r.removed) parts.push(r.removed + ' text edit' + (r.removed > 1 ? 's' : '') + ' removed the old text from the file'); if (r.covered) parts.push(r.covered + ' edit' + (r.covered > 1 ? 's' : '') + ' covered the old text with a patch (it may still be selectable)'); if (r.imageText) parts.push(r.imageText + ' block' + (r.imageText > 1 ? 's' : '') + ' with special characters saved as picture text');
           status.textContent = '✅ Saved ' + ui.fmtBytes(blob.size) + (parts.length ? ' · ' + parts.join(' · ') : '');
         } catch (err) { console.error(err); ui.toast('Could not save: ' + (err.message || err)); status.textContent = 'Could not save: ' + (err.message || err); }
