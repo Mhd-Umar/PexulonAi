@@ -418,7 +418,7 @@
           status.textContent = 'Building your PDF…';
           await Promise.all(live().flatMap(e => e.objs.filter(TEXTY).map(o => ensureFont(o.fam, o.bold, o.italic))));
           const entries = live().map(e => ({ src: e.src, w: e.w, h: e.h, view: e.view, rot: e.rot, baseRot: e.baseRot, deleted: false, objs: e.objs.map(o => { const c = Object.assign({}, o); if (TEXTY(c)) { c.lines = o.lines; } return c; }) }));
-          const out = await Core.exportDoc(S.PL, S.bytes, entries, S.assets, { metrics: S.metrics, textImage, coverImage, fontBytes: async (f, b, i) => fontBytes.get(f + '|' + Core.resolveStyle(f, b, i)), removeText: Core.removeTextFactory(S.metrics) });
+          const out = await Core.exportDoc(S.PL, S.bytes, entries, S.assets, { metrics: S.metrics, textImage, coverImage, fontBytes: async (f, b, i) => fontBytes.get(f + '|' + Core.resolveStyle(f, b, i)), removeText: Core.removeTextFactory(S.metrics), rasterEdits: true });
           const pdfBytes = out instanceof Uint8Array ? out.slice() : new Uint8Array(out);
           if (pdfBytes.length < 100 || String.fromCharCode(...pdfBytes.subarray(0, 5)) !== '%PDF-') throw new Error('The generated file is incomplete. No download was started; please try saving again.');
           const blob = new Blob([pdfBytes], { type: 'application/pdf' }); ui.download(blob, S.name + '-edited.pdf'); S.dirty = false; const r = out.report || {};
