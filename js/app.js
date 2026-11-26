@@ -145,46 +145,12 @@
   const AI_DEFAULT = { mode: 'server', key: '', model: '', gemini: 'gemini-flash-latest', groq: 'openai/gpt-oss-20b' };
   TN.ai.cfg = () => Object.assign({}, AI_DEFAULT, TN.store.get('ai', {}));
   TN.ai.mode = () => { const c = TN.ai.cfg(); return c.mode !== 'server' && c.key ? c.mode : 'server'; };
+  // Keep the chat interface compatible while using a reliable one-shot response (no SSE dependency).
   TN.ai.stream = async function ({ system = '', messages, prompt, maxTokens = 1500, temperature = 0.4, onChunk = () => {} }) {
-    messages = messages || [{ role: 'user', content: prompt }];
-    const c = TN.ai.cfg(); let url, headers = { 'content-type': 'application/json' }, body;
-    if (c.mode === 'gemini' && c.key) {
-      const model = c.model || c.gemini; url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
-      headers['x-goog-api-key'] = c.key;
-      body = { systemInstruction: system ? { parts: [{ text: system }] } : undefined, contents: messages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })), generationConfig: { maxOutputTokens: maxTokens, temperature, ...(model.startsWith('gemini-2.5-flash') ? { thinkingConfig: { thinkingBudget: 0 } } : {}) } };
-    } else if (c.mode === 'groq' && c.key) {
-      url = 'https://api.groq.com/openai/v1/chat/completions'; headers.authorization = 'Bearer ' + c.key;
-      body = { model: c.model || c.groq, messages: [...(system ? [{ role: 'system', content: system }] : []), ...messages], max_tokens: maxTokens, temperature, stream: true };
-    } else {
-      url = window.TN_AI_STREAM_URL || '/.netlify/functions/ai-stream';
-      body = { system, messages, maxTokens, temperature };
-    }
-    let res;
-    try { res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) }); }
-    catch (_) { throw new Error('Could not reach the AI service. Check your internet connection.'); }
-    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || aiErr(res.status)); }
-    if (!res.body || !res.body.getReader) throw new Error('This browser does not support streaming.');
-    const reader = res.body.getReader(), decoder = new TextDecoder(); let buf = '', full = '';
-    const consume = raw => {
-      const line = raw.split(/\r?\n/).find(x => x.startsWith('data:'));
-      if (!line) return;
-      const value = line.slice(5).trim(); if (!value) return;
-      if (value === '[DONE]') return;
-      let d; try { d = JSON.parse(value); } catch (_) { return; }
-      if (d.error) throw new Error(d.error);
-      const chunk = d.text || d.candidates?.[0]?.content?.parts?.map(x => x.text || '').join('') || d.choices?.[0]?.delta?.content || '';
-      if (chunk) { full += chunk; onChunk(chunk, full); }
-    };
-    while (true) {
-      const { value, done } = await reader.read(); if (done) break;
-      buf += decoder.decode(value, { stream: true }); const events = buf.split(/\r?\n\r?\n/); buf = events.pop() || '';
-      for (const ev of events) consume(ev);
-    }
-    if (buf.trim()) consume(buf);
-    if (!full.trim()) throw new Error('The AI returned an empty answer. Try rephrasing.');
-    return full.trim();
+    const answer = await TN.ai.ask({ system, messages, prompt, maxTokens, temperature });
+    if (answer) onChunk(answer, answer);
+    return answer;
   };
-
   TN.ai.ask = async function ({ system = '', messages, prompt, maxTokens = 1500, temperature = 0.4, fast = false }) {
     messages = messages || [{ role: 'user', content: prompt }];
     const c = TN.ai.cfg(); let res, data;
@@ -208,12 +174,15 @@
     }
     try { res = await fetch(window.TN_AI_URL || '/.netlify/functions/ai', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ system, messages, maxTokens, temperature, fast }) }); }
     catch (e) { throw new Error('Could not reach the AI service. Check your internet connection.'); }
-    data = await res.json().catch(() => ({}));
+    const responseText = await res.text().catch(() => '');
+    try { data = responseText ? JSON.parse(responseText) : {}; } catch (_) { data = {}; }
     if (!res.ok) {
-      if (res.status === 404 || res.status === 405) throw new Error('The AI helper is not set up on this site yet. You can add your own free key in Settings (⚙).');
-      throw new Error(data.error || aiErr(res.status));
+      if (res.status === 404 || res.status === 405) throw new Error('Netlify AI Function was not deployed. Check that netlify/functions/ai.js and netlify.toml are in the GitHub repository root, then redeploy from Git.');
+      if (res.status === 502 && !data.error) throw new Error('Netlify returned HTTP 502 without an AI error message. Check Netlify → Functions → ai → Logs and verify the API key environment variable.');
+      throw new Error(data.error || `AI request failed (HTTP ${res.status}). ${responseText.slice(0, 180)}`);
     }
-    return (data.text || '').trim();
+    if (!data || typeof data.text !== 'string' || !data.text.trim()) throw new Error('The AI service returned an empty or invalid response. Please try again.');
+    return data.text.trim();
   };
   function aiErr(status, msg) {
     if (status === 429) return 'Free-tier limit reached. Wait a minute and try again.';

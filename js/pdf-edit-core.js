@@ -206,7 +206,7 @@
       // pass 1: text edits (remove original, then draw)
       for (const o of e.objs.filter(o => o.type === 'edit')) {
         let coveredNeeded = true;
-        if (env.removeText && o.items && o.items.length) {
+        if (!env.rasterEdits && env.removeText && o.items && o.items.length) {
           const targets = o.items.map(it => { const a = map(it.x, it.y); return { str: it.str, x: a[0], y: a[1], w: it.w, fs: it.fs, rot }; });
           try { const r = env.removeText(PL, doc, page, targets, { rot }); if (r && r.removed === targets.length) { coveredNeeded = false; report.removed++; } else report.covered++; } catch (err) { report.covered++; }
         } else report.covered++;
@@ -242,7 +242,7 @@
       if (!lines.length || !lines.join('').trim()) return;
       const encodable = lines.every(l => metrics.canEncode(l, o.fam, o.bold, o.italic));
       const lh = o.lineH || o.size * 1.2, hs = o.hs || 1, wOf = s => { const x = metrics.width(s, o.fam, o.bold, o.italic, o.size); return (isNaN(x) ? s.length * o.size * 0.55 : x) * hs; };
-      if (!encodable) {
+      if (!encodable || (isEdit && env.rasterEdits)) {
         if (!env.textImage) throw new Error('This text contains characters the standard PDF fonts cannot draw.');
         const img = await env.textImage(lines, { fam: o.fam, bold: o.bold, italic: o.italic, size: o.size, color: o.color, lineH: lh, align: o.align, width: Math.max(o.maxW || 0, ...lines.map(l => wOf(l))), hs }); report.imageText++;
         const embedded = await doc.embedPng(img.png), x0 = o.x0 ?? o.x, top = (o.base0 ?? (o.y + o.size)) - o.size * 0.95; const bl = map(x0, top + img.h / img.scale); page.drawImage(embedded, { x: bl[0], y: bl[1], width: img.w / img.scale, height: img.h / img.scale, rotate: PL.degrees(rot) }); return;
