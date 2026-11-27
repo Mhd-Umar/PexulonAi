@@ -151,9 +151,19 @@
         const st = S.sty, o = { id: uid(), type: 'text', fam: st.fam, size: st.size, bold: st.bold, italic: st.italic, underline: st.underline, color: st.color, align: st.align, text: '', hs: 1, lineH: st.size * 1.2, x0: x, base0: y + st.size * 0.95, maxW: 0, x, y, w: 20, h: st.size * 1.25, fresh: true };
         relayout(o, e); useFont(o, e); return o;
       }
+      // Work out how the original text is aligned (left / centre / right) so the edited text keeps it.
+      function detectAlign(e, blk) {
+        const W = e.w, tol = Math.max(1.5, 0.012 * W), ls = blk.lines;
+        if (ls.length === 1) { const l = ls[0].x0, r = W - ls[0].x1, wid = ls[0].x1 - ls[0].x0; if (wid > 0.86 * W) return 'left'; if (Math.abs(l - r) <= tol * 1.6 && l > 0.06 * W) return 'center'; if (r < 0.5 * l && l > 0.4 * W && r < 0.14 * W) return 'right'; return 'left'; }
+        const c = ls.map(x => (x.x0 + x.x1) / 2), x0s = ls.map(x => x.x0), x1s = ls.map(x => x.x1), span = a => Math.max(...a) - Math.min(...a);
+        if (span(c) <= tol && span(x0s) > tol * 1.5) return 'center'; if (span(x1s) <= tol && span(x0s) > tol * 1.5) return 'right'; return 'left';
+      }
       function editFromBlock(e, blk, key) {
-        const cl = e.text.cls[blk.font] || { fam: 'Helvetica', bold: false, italic: false }, sm = sample(e, blk), origW = blk.x1 - blk.x0;
-        const o = { id: uid(), type: 'edit', key, x: blk.x0, y: blk.top, w: origW, h: blk.bottom - blk.top, bg: sm.bg, fam: cl.fam, bold: cl.bold, italic: cl.italic, size: Math.round(blk.fs * 10) / 10, color: sm.color, align: 'left', hs: 1, lineH: blk.pitch, base0: blk.lines[0].y, x0: blk.x0, maxW: blk.lines.length > 1 ? origW * 1.03 : 0, text: blk.text, orig: blk.text, origSize: blk.fs, fresh: true, items: blk.lines.flatMap(l => l.items.map(i => ({ x: i.x, y: i.y, w: i.w, str: i.str, fs: i.fs }))) };
+        const cl = e.text.cls[blk.font] || { fam: 'Helvetica', bold: false, italic: false }, sm = sample(e, blk), origW = blk.x1 - blk.x0, align = detectAlign(e, blk), multi = blk.lines.length > 1;
+        let x0 = blk.x0, maxW = multi ? origW * 1.03 : 0; const M = 18; // keep centred/right text inside the page margins
+        if (align === 'center') { const cx = (blk.x0 + blk.x1) / 2; maxW = multi ? origW * 1.03 : Math.max(origW, 2 * Math.min(cx, e.w - cx) - 2 * M); x0 = cx - maxW / 2; }
+        else if (align === 'right') { maxW = multi ? origW * 1.03 : Math.max(origW, blk.x1 - M); x0 = blk.x1 - maxW; }
+        const o = { id: uid(), type: 'edit', key, x: blk.x0, y: blk.top, w: origW, h: blk.bottom - blk.top, bg: sm.bg, fam: cl.fam, bold: cl.bold, italic: cl.italic, size: Math.round(blk.fs * 10) / 10, color: sm.color, align, hs: 1, lineH: blk.pitch, base0: blk.lines[0].y, x0, maxW, text: blk.text, orig: blk.text, origSize: blk.fs, fresh: true, items: blk.lines.flatMap(l => l.items.map(i => ({ x: i.x, y: i.y, w: i.w, str: i.str, fs: i.fs }))) };
         relayout(o, e); useFont(o, e); return o;
       }
       function blocksOf(e) { if (!e.text) return []; return S.gran === 'line' ? e.text.lines.map(Core.lineAsBlock) : e.text.blocks; }
@@ -442,7 +452,7 @@
         try {
           await Promise.all(live().flatMap(e => e.objs.filter(TEXTY).map(o => ensureFont(o.fam, o.bold, o.italic))));
           const entries = live().map(e => ({ src: e.src, w: e.w, h: e.h, view: e.view, rot: e.rot, baseRot: e.baseRot, deleted: false, objs: e.objs.map(o => { const c = Object.assign({}, o); if (TEXTY(c)) { c.lines = o.lines; } return c; }) }));
-          const out = await Core.exportDoc(S.PL, S.bytes, entries, S.assets, { metrics: S.metrics, textImage, coverImage, fontBytes: async (f, b, i) => fontBytes.get(f + '|' + Core.resolveStyle(f, b, i)), removeText: Core.removeTextFactory(S.metrics) });
+          const out = await Core.exportDoc(S.PL, S.bytes, entries, S.assets, { metrics: S.metrics, textImage, coverImage, ensureFont: (f, b, i) => ensureFont(f, b, i), fontBytes: async (f, b, i) => fontBytes.get(f + '|' + Core.resolveStyle(f, b, i)), removeText: Core.removeTextFactory(S.metrics) });
           const blob = new Blob([out], { type: 'application/pdf' }); ui.download(blob, S.name + '-edited.pdf'); S.dirty = false; const r = out.report || {};
           const parts = []; if (r.removed) parts.push(r.removed + ' text edit' + (r.removed > 1 ? 's' : '') + ' removed the old text from the file'); if (r.covered) parts.push(r.covered + ' edit' + (r.covered > 1 ? 's' : '') + ' covered the old text with a patch (it may still be selectable)'); if (r.imageText) parts.push(r.imageText + ' block' + (r.imageText > 1 ? 's' : '') + ' with special characters saved as picture text');
           status.textContent = '✅ Saved ' + ui.fmtBytes(blob.size) + (parts.length ? ' · ' + parts.join(' · ') : '');
