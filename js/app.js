@@ -169,7 +169,7 @@
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 11500);
     try {
-      res = await fetch(window.TN_AI_URL || '/.netlify/functions/ai', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ system, messages: messages.slice(-8).map(m => ({ role: m.role, content: String(m.content || '').slice(-12000) })), maxTokens: Math.min(maxTokens, 1100), temperature, fast }), signal: controller.signal });
+      res = await fetch(window.TN_AI_URL || '/api/ai', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ system, messages: messages.slice(-8).map(m => ({ role: m.role, content: String(m.content || '').slice(-12000) })), maxTokens: Math.min(maxTokens, 1100), temperature, fast }), signal: controller.signal });
     } catch (e) {
       if (e && e.name === 'AbortError') throw new Error('AI request took too long. Please try a shorter question or try again shortly.');
       throw new Error('Could not reach the AI service. Check your internet connection.');
@@ -182,7 +182,7 @@
     return (data.text || '').trim();
   };
   // Streaming companion used by the chat UI. Falls back to the regular AI
-  // endpoint when the Netlify streaming runtime is unavailable.
+  // endpoint when the Cloudflare Pages streaming endpoint is unavailable.
   TN.ai.stream = async function ({ system = '', messages = [], prompt, maxTokens = 1500, temperature = 0.4, onChunk = () => {} }) {
     const input = messages.length ? messages : [{ role: 'user', content: String(prompt || '') }];
     if (!input.some(m => String(m.content || '').trim())) throw new Error('Please enter a message first.');
@@ -197,7 +197,7 @@
     const timer = setTimeout(() => controller.abort(), 35000);
     let response, full = '';
     try {
-      response = await fetch('/.netlify/functions/ai-stream', {
+      response = await fetch('/api/ai-stream', {
         method: 'POST', headers: { 'content-type': 'application/json', 'accept': 'text/event-stream' },
         body: JSON.stringify({ system, messages: input.slice(-12).map(m => ({ role: m.role, content: String(m.content || '').slice(-12000) })), maxTokens: Math.min(maxTokens, 2500), temperature }),
         signal: controller.signal
