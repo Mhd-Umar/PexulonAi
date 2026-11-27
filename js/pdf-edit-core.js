@@ -203,19 +203,16 @@
     async function applyObjs(page, e) {
       const map = C.vpToPdf(e.view, e.rot), rot = ((e.rot % 360) + 360) % 360, rect = (x, y, w, h) => { const a = map(x, y), b = map(x + w, y + h); return { x: Math.min(a[0], b[0]), y: Math.min(a[1], b[1]), w: Math.abs(a[0] - b[0]), h: Math.abs(a[1] - b[1]) }; };
       const rgbc = hx => PL.rgb(...C.hex(hx));
-      // pass 1: replace real PDF text. Never hide a failed replacement behind
-      // a raster patch: abort the export rather than create a misleading blank edit.
+      // pass 1: text edits (remove original, then draw)
       for (const o of e.objs.filter(o => o.type === 'edit')) {
-        if (env.rasterEdits) throw new Error('Raster text replacement is disabled. Reload the editor and try again.');
-        if (!env.removeText || !o.items || !o.items.length) throw new Error('This text is not a replaceable PDF text object. It may be part of a scanned image.');
-        const targets = o.items.map(it => { const a = map(it.x, it.y); return { str: it.str, x: a[0], y: a[1], w: it.w, fs: it.fs, rot }; });
-        let result;
-        try { result = env.removeText(PL, doc, page, targets, { rot }); }
-        catch (err) { throw new Error('Could not safely remove the original PDF text: ' + (err && err.message ? err.message : 'unknown error')); }
-        if (!result || result.removed !== targets.length) {
-          throw new Error('Could not safely replace all original text runs. No edited PDF was downloaded; please select a smaller text block.');
-        }
-        report.removed++;
+        let coveredNeeded = true;
+        if (env.removeText && o.items && o.items.length) {
+          const targets = o.items.map(it => { const a = map(it.x, it.y); return { str: it.str, x: a[0], y: a[1], w: it.w, fs: it.fs, rot }; });
+          try { const r = env.removeText(PL, doc, page, targets, { rot }); if (r && r.removed === targets.length && !(r.invisible > 0)) { coveredNeeded = false; report.removed++; } else report.covered++; } catch (err) { report.covered++; }
+        } else report.covered++;
+        if (coveredNeeded && env.coverImage && o.items && o.items.length) { const ci = await env.coverImage(o, e); if (ci) { const emb = await doc.embedPng(ci.png), bl = map(ci.x, ci.y + ci.h); page.drawImage(emb, { x: bl[0], y: bl[1], width: ci.w, height: ci.h, rotate: PL.degrees(rot) }); } else if (o.bg) { const r = rect(o.x - 1, o.y - 1, o.w + 2, o.h + 2); page.drawRectangle({ x: r.x, y: r.y, width: r.w, height: r.h, color: rgbc(o.bg), borderWidth: 0 }); } }
+        else if (coveredNeeded && o.bg) { const r = rect(o.x - 1, o.y - 1, o.w + 2, o.h + 2); page.drawRectangle({ x: r.x, y: r.y, width: r.w, height: r.h, color: rgbc(o.bg), borderWidth: 0 }); }
+        else if (o.bg && o.forceCover) { const r = rect(o.x - 1, o.y - 1, o.w + 2, o.h + 2); page.drawRectangle({ x: r.x, y: r.y, width: r.w, height: r.h, color: rgbc(o.bg), borderWidth: 0 }); }
         await drawTextBlock(page, e, o, map, rot, true);
       }
       for (const o of e.objs) {
@@ -243,27 +240,38 @@
     async function drawTextBlock(page, e, o, map, rot, isEdit) {
       const lines = o.lines || C.layoutText(o.text, { fam: o.fam, bold: o.bold, italic: o.italic, size: o.size, hs: o.hs || 1, maxW: o.maxW || 0 }, metrics);
       if (!lines.length || !lines.join('').trim()) return;
-      const encodable = lines.every(l => metrics.canEncode(l, o.fam, o.bold, o.italic));
-      const lh = o.lineH || o.size * 1.2, hs = o.hs || 1, wOf = s => { const x = metrics.width(s, o.fam, o.bold, o.italic, o.size); return (isNaN(x) ? s.length * o.size * 0.55 : x) * hs; };
-      if (!encodable || (isEdit && env.rasterEdits)) {
+      let fam = o.fam, encodable = lines.every(l => metrics.canEncode(l, fam, o.bold, o.italic));
+      if (!encodable && env.ensureFont) { // the chosen font lacks a glyph (₹, ✓, arrows…): switch to a bundled font that has it, keeping real text
+        const sans = ['dejavusans', 'dejavuserif', 'dejavumono'], order = /serif|Times|caladea|gelasio|crimson|lora|bitter/i.test(fam) ? ['dejavuserif', 'dejavusans', 'dejavumono'] : /mono|Courier/i.test(fam) ? ['dejavumono', 'dejavusans', 'dejavuserif'] : sans;
+        for (const cand of order) { try { await env.ensureFont(cand, o.bold, o.italic); } catch (_) { continue; } if (lines.every(l => metrics.canEncode(l, cand, o.bold, o.italic))) { fam = cand; encodable = true; break; } }
+      }
+      const lh = o.lineH || o.size * 1.2, hs = o.hs || 1, wOf = s => { const x = metrics.width(s, fam, o.bold, o.italic, o.size); return (isNaN(x) ? s.length * o.size * 0.55 : x) * hs; };
+      if (!encodable) {
         if (!env.textImage) throw new Error('This text contains characters the standard PDF fonts cannot draw.');
         const img = await env.textImage(lines, { fam: o.fam, bold: o.bold, italic: o.italic, size: o.size, color: o.color, lineH: lh, align: o.align, width: Math.max(o.maxW || 0, ...lines.map(l => wOf(l))), hs }); report.imageText++;
         const embedded = await doc.embedPng(img.png), x0 = o.x0 ?? o.x, top = (o.base0 ?? (o.y + o.size)) - o.size * 0.95; const bl = map(x0, top + img.h / img.scale); page.drawImage(embedded, { x: bl[0], y: bl[1], width: img.w / img.scale, height: img.h / img.scale, rotate: PL.degrees(rot) }); return;
       }
-      const font = await getFont(o.fam, o.bold, o.italic), key = page.node.newFontDictionary(font.name, font.ref), col = PL.rgb(...C.hex(o.color, [0, 0, 0])), rad = rot * Math.PI / 180;
+      const font = await getFont(fam, o.bold, o.italic), key = page.node.newFontDictionary(font.name, font.ref), col = PL.rgb(...C.hex(o.color, [0, 0, 0])), rad = rot * Math.PI / 180;
       const boxW = o.maxW || Math.max(...lines.map(wOf)), left = o.x0 ?? o.x;
       lines.forEach((ln, i) => {
         if (!ln) return; const w = wOf(ln); let x = left; if (o.align === 'center') x = left + (boxW - w) / 2; else if (o.align === 'right') x = left + boxW - w;
-        const p = map(x, (o.base0 ?? (o.y + o.size)) + i * lh);
-        // Push operators onto the page's actual Contents stream. getContentStream()
-        // only creates a detached stream and can silently omit newly drawn text.
+        const p = map(x, (o.base0 ?? (o.y + o.size)) + i * lh), cs = page.getContentStream();
         const ops = [PL.pushGraphicsState(), PL.beginText(), PL.setFillingColor(col), PL.setFontAndSize(key, o.size)]; if (Math.abs(hs - 1) > 0.002) ops.push(PL.setCharacterSqueeze(hs * 100));
-        ops.push(PL.rotateAndSkewTextRadiansAndTranslate(rad, 0, 0, p[0], p[1]), PL.showText(font.encodeText(ln)), PL.endText(), PL.popGraphicsState()); page.pushOperators(...ops);
+        ops.push(PL.rotateAndSkewTextRadiansAndTranslate(rad, 0, 0, p[0], p[1]), PL.showText(font.encodeText(ln)), PL.endText(), PL.popGraphicsState()); cs.push(...ops);
         if (o.underline) { const q = map(x + w, (o.base0 ?? (o.y + o.size)) + i * lh + o.size * 0.12); page.drawLine({ start: { x: map(x, (o.base0 ?? (o.y + o.size)) + i * lh + o.size * 0.12)[0], y: map(x, (o.base0 ?? (o.y + o.size)) + i * lh + o.size * 0.12)[1] }, end: { x: q[0], y: q[1] }, thickness: Math.max(0.6, o.size / 18), color: col }); }
       });
     }
 
-    for (let k = 0; k < entries.length; k++) { const e = entries[k]; if (e.deleted || e.src == null) continue; if (e.objs.length) await applyObjs(pages[e.src], e); if (e.baseRot != null && e.rot !== e.baseRot) pages[e.src].setRotation(PL.degrees(((e.rot % 360) + 360) % 360)); }
+    // Isolate the page's own drawing state: whatever the original content leaves behind (clip, colour, text mode,
+    // transparency, unbalanced q) must not affect what we add afterwards.
+    const isolated = new Set(); const isolate = page => {
+      if (isolated.has(page)) return; isolated.add(page); try {
+        const ctx = doc.context; if (!page.node.get(PL.PDFName.of('Contents'))) return; page.node.normalize(); const arr = page.node.Contents(); if (!arr || !arr.insert) return;
+        let depth = 0; for (const o of tokenize(syncStreamBytes(PL, doc, page))) { if (o.op === 'q') depth++; else if (o.op === 'Q') depth = Math.max(0, depth - 1); }
+        arr.insert(0, ctx.register(ctx.flateStream(new TextEncoder().encode('q\n')))); arr.push(ctx.register(ctx.flateStream(new TextEncoder().encode('Q\n'.repeat(depth + 1)))));
+        page.contentStream = undefined; page.contentStreamRef = undefined;
+      } catch (err) { /* keep the page as it is */ } };
+    for (let k = 0; k < entries.length; k++) { const e = entries[k]; if (e.deleted || e.src == null) continue; if (e.objs.length) { isolate(pages[e.src]); await applyObjs(pages[e.src], e); } if (e.baseRot != null && e.rot !== e.baseRot) pages[e.src].setRotation(PL.degrees(((e.rot % 360) + 360) % 360)); }
     const live = entries.filter(e => !e.deleted), orderChanged = live.length !== pages.length || live.some((e, i) => e.src !== i);
     if (orderChanged) {
       const keep = [];
@@ -345,63 +353,78 @@
     };
   };
   // synchronous because stream decoding in pdf-lib is synchronous
+  const decodeStream = (PL, s) => (s instanceof PL.PDFRawStream) ? PL.decodePDFRawStream(s).decode() : (s.getUnencodedContents ? s.getUnencodedContents() : s.getContents());
+  const applyEdits = (bytes, edits) => { edits.sort((p, q) => p.start - q.start); const chunks = [], enc = new TextEncoder(); let last = 0, len = 0; for (const e of edits) { chunks.push(bytes.subarray(last, e.start)); chunks.push(enc.encode(e.repl)); last = e.end; } chunks.push(bytes.subarray(last)); chunks.forEach(c => len += c.length); const out = new Uint8Array(len); let p = 0; chunks.forEach(c => { out.set(c, p); p += c.length; }); return out; };
   function removeSync(PL, doc, page, targets, opts, dirx, diry, metrics) {
-    const ctx = doc.context, bytes = syncStreamBytes(PL, doc, page), ops = tokenize(bytes), fonts = getResFonts(PL, doc, page), cache = new Map();
-    const rr = opts.redactRect || null; const done = new Array(targets.length).fill(0);
-    let ctm = [1, 0, 0, 1, 0, 0]; const stack = []; let Tm = [1, 0, 0, 1, 0, 0], Tlm = [1, 0, 0, 1, 0, 0], Tc = 0, Tw = 0, Th = 1, TL = 0, Ts = 0, fsz = 0, font = null, exact = true;
-    const edits = []; // {start,end,repl}
-    const origin = () => { const m = mul(mul([1, 0, 0, 1, 0, Ts], Tm), ctm); return { x: m[4], y: m[5], sc: Math.hypot(m[0], m[1]) || 1, m }; };
-    function advanceOf(op, args) { // returns {adv (text-space), known}
-      if (!font || font.unknown) return { adv: 0, known: false };
-      const strs = op === 'TJ' ? args[0].v : [args[args.length - 1]]; let adv = 0;
-      for (const it of strs) { if (it.t === 'num') { adv -= it.v / 1000 * fsz * Th; continue; } if (it.t !== 'str') continue; const bs = it.v;
-        if (font.bytes === 2) { for (let k = 0; k + 1 < bs.length; k += 2) { const code = (bs[k] << 8) | bs[k + 1]; adv += (font.w(code) / 1000 * fsz + Tc) * Th; } }
-        else for (let k = 0; k < bs.length; k++) { adv += (font.w(bs[k]) / 1000 * fsz + Tc + (bs[k] === 32 ? Tw : 0)) * Th; } }
-      return { adv, known: true };
-    }
-    for (const o of ops) {
-      const a = o.args, nums = a.filter(x => x.t === 'num').map(x => x.v);
-      switch (o.op) {
-        case 'q': stack.push([ctm.slice(), Tc, Tw, Th, TL, Ts, fsz, font]); break;
-        case 'Q': { const s = stack.pop(); if (s) { [ctm, Tc, Tw, Th, TL, Ts, fsz, font] = s; } break; }
-        case 'cm': if (nums.length === 6) ctm = mul(nums, ctm); break;
-        case 'BT': Tm = [1, 0, 0, 1, 0, 0]; Tlm = Tm.slice(); exact = true; break;
-        case 'Tc': Tc = nums[0] || 0; break; case 'Tw': Tw = nums[0] || 0; break; case 'Tz': Th = (nums[0] ?? 100) / 100; break; case 'TL': TL = nums[0] || 0; break; case 'Ts': Ts = nums[0] || 0; break;
-        case 'Tf': { const nm = a.find(x => x.t === 'name'); fsz = nums[0] || 0; font = nm && fonts ? fontInfo(PL, doc, fonts, nm.v, metrics, cache) : { unknown: true }; break; }
-        case 'Td': Tlm = mul([1, 0, 0, 1, nums[0] || 0, nums[1] || 0], Tlm); Tm = Tlm.slice(); exact = true; break;
-        case 'TD': TL = -(nums[1] || 0); Tlm = mul([1, 0, 0, 1, nums[0] || 0, nums[1] || 0], Tlm); Tm = Tlm.slice(); exact = true; break;
-        case 'Tm': if (nums.length === 6) { Tm = nums.slice(); Tlm = nums.slice(); exact = true; } break;
-        case 'T*': Tlm = mul([1, 0, 0, 1, 0, -TL], Tlm); Tm = Tlm.slice(); exact = true; break;
-        case 'Tj': case 'TJ': case "'": case '"': {
-          let pre = ''; if (o.op === "'" || o.op === '"') { if (o.op === '"') { Tw = nums[0] || 0; Tc = nums[1] || 0; pre = fmt(Tw) + ' Tw ' + fmt(Tc) + ' Tc '; } Tlm = mul([1, 0, 0, 1, 0, -TL], Tlm); Tm = Tlm.slice(); exact = true; pre += 'T* '; }
-          const pos = origin(), { adv, known } = advanceOf(o.op, a), sc = pos.sc;
-          // where does this run lie, in user space?
-          const tdx = Tm[0] * 0 + 0; const ux = pos.m[0], uy = pos.m[1]; const len = Math.hypot(ux, uy) || 1; const dx = ux / len, dy = uy / len;
-          let hit = false;
-          if (exact && known) {
-            if (rr) { const ex = pos.x + dx * adv * sc, ey = pos.y + dy * adv * sc, cx = (pos.x + ex) / 2, cy = (pos.y + ey) / 2 + fsz * sc * 0.3; if (cx >= rr.x0 && cx <= rr.x1 && cy >= rr.y0 && cy <= rr.y1) hit = true; }
-            else for (let t = 0; t < targets.length; t++) { const T = targets[t]; const ddx = pos.x - T.x, ddy = pos.y - T.y, along = ddx * dirx + ddy * diry, across = -ddx * diry + ddy * dirx, tol = 0.4 * (T.fs || 10), runLen = adv * sc;
-              if (Math.abs(across) <= tol && along >= -1.5 && along + runLen <= T.w + Math.max(2, 0.25 * (T.fs || 10)) && along <= T.w + 1) { hit = true; done[t] += Math.max(0, runLen); break; } }
-          }
-          if (hit) { const adj = fsz && Th ? -adv / (fsz * Th) * 1000 : 0; edits.push({ start: o.start, end: o.end, repl: pre + '[' + fmt(adj) + '] TJ' }); }
-          if (known) { Tm = mul([1, 0, 0, 1, adv, 0], Tm); } else exact = false;
-          break; }
-        default: break;
+    const ctx = doc.context, rr = opts.redactRect || null, done = new Array(targets.length).fill(0), N = n => PL.PDFName.of(n);
+    const st = { invisible: 0, hits: 0, formsPatched: 0 }; const formsSeen = new Set();
+    // process one content stream; `fonts` = its font dict, `res` = its resource dict, `ctm0` = starting matrix
+    function run(bytes, fonts, res, ctm0, depth) {
+      const ops = tokenize(bytes), cache = new Map(), edits = [], stack = [];
+      let ctm = ctm0.slice(), Tm = [1, 0, 0, 1, 0, 0], Tlm = [1, 0, 0, 1, 0, 0], Tc = 0, Tw = 0, Th = 1, TL = 0, Ts = 0, fsz = 0, font = null, Tr = 0, exact = true;
+      const origin = () => { const m = mul(mul([1, 0, 0, 1, 0, Ts], Tm), ctm); return { x: m[4], y: m[5], sc: Math.hypot(m[0], m[1]) || 1, m }; };
+      function advanceOf(op, args) {
+        if (!font || font.unknown) return { adv: 0, known: false };
+        const strs = op === 'TJ' ? args[0].v : [args[args.length - 1]]; let adv = 0;
+        for (const it of strs) { if (it.t === 'num') { adv -= it.v / 1000 * fsz * Th; continue; } if (it.t !== 'str') continue; const bs = it.v;
+          if (font.bytes === 2) { for (let k = 0; k + 1 < bs.length; k += 2) { const code = (bs[k] << 8) | bs[k + 1]; adv += (font.w(code) / 1000 * fsz + Tc) * Th; } }
+          else for (let k = 0; k < bs.length; k++) { adv += (font.w(bs[k]) / 1000 * fsz + Tc + (bs[k] === 32 ? Tw : 0)) * Th; } }
+        return { adv, known: true };
       }
+      for (const o of ops) {
+        const a = o.args, nums = a.filter(x => x.t === 'num').map(x => x.v);
+        switch (o.op) {
+          case 'q': stack.push([ctm.slice(), Tc, Tw, Th, TL, Ts, fsz, font, Tr]); break;
+          case 'Q': { const s2 = stack.pop(); if (s2) { [ctm, Tc, Tw, Th, TL, Ts, fsz, font, Tr] = s2; } break; }
+          case 'cm': if (nums.length === 6) ctm = mul(nums, ctm); break;
+          case 'BT': Tm = [1, 0, 0, 1, 0, 0]; Tlm = Tm.slice(); exact = true; break;
+          case 'Tc': Tc = nums[0] || 0; break; case 'Tw': Tw = nums[0] || 0; break; case 'Tz': Th = (nums[0] ?? 100) / 100; break; case 'TL': TL = nums[0] || 0; break; case 'Ts': Ts = nums[0] || 0; break; case 'Tr': Tr = nums[0] || 0; break;
+          case 'Tf': { const nm = a.find(x => x.t === 'name'); fsz = nums[0] || 0; font = nm && fonts ? fontInfo(PL, doc, fonts, nm.v, metrics, cache) : { unknown: true }; break; }
+          case 'Td': Tlm = mul([1, 0, 0, 1, nums[0] || 0, nums[1] || 0], Tlm); Tm = Tlm.slice(); exact = true; break;
+          case 'TD': TL = -(nums[1] || 0); Tlm = mul([1, 0, 0, 1, nums[0] || 0, nums[1] || 0], Tlm); Tm = Tlm.slice(); exact = true; break;
+          case 'Tm': if (nums.length === 6) { Tm = nums.slice(); Tlm = nums.slice(); exact = true; } break;
+          case 'T*': Tlm = mul([1, 0, 0, 1, 0, -TL], Tlm); Tm = Tlm.slice(); exact = true; break;
+          case 'Do': { // text inside a Form XObject
+            if (depth >= 4) break; const nm = a.find(x => x.t === 'name'); if (!nm || !res) break;
+            try {
+              const xd = ctx.lookup(res.get(N('XObject'))); const ref = xd && xd.get(N(nm.v)); const fo = ref && ctx.lookup(ref);
+              if (!fo || !fo.dict || !/Form/.test(String(fo.dict.get(N('Subtype')))) || formsSeen.has(ref)) break; formsSeen.add(ref);
+              const mArr = ctx.lookup(fo.dict.get(N('Matrix'))), m = mArr && mArr.size && mArr.size() === 6 ? [0, 1, 2, 3, 4, 5].map(k => { const v = ctx.lookup(mArr.get(k)); return v && v.asNumber ? v.asNumber() : 0; }) : [1, 0, 0, 1, 0, 0];
+              const fres = ctx.lookup(fo.dict.get(N('Resources'))) || res, ffonts = fres && ctx.lookup(fres.get(N('Font'))) || fonts;
+              const fb = decodeStream(PL, fo), r2 = run(fb, ffonts, fres, mul(m, ctm), depth + 1);
+              if (r2.edits.length) { const dict = {}; fo.dict.entries().forEach(([k, v]) => { const key = k.toString().slice(1); if (!/^(Length|Filter|DecodeParms|DL)$/.test(key)) dict[key] = v; }); ctx.assign(ref, ctx.flateStream(applyEdits(fb, r2.edits), dict)); st.formsPatched++; }
+            } catch (e) { /* leave the form untouched */ }
+            break; }
+          case 'Tj': case 'TJ': case "'": case '"': {
+            let pre = ''; if (o.op === "'" || o.op === '"') { if (o.op === '"') { Tw = nums[0] || 0; Tc = nums[1] || 0; pre = fmt(Tw) + ' Tw ' + fmt(Tc) + ' Tc '; } Tlm = mul([1, 0, 0, 1, 0, -TL], Tlm); Tm = Tlm.slice(); exact = true; pre += 'T* '; }
+            const pos = origin(), { adv, known } = advanceOf(o.op, a), sc = pos.sc;
+            const ux = pos.m[0], uy = pos.m[1]; const len = Math.hypot(ux, uy) || 1; const dx = ux / len, dy = uy / len;
+            let hit = false;
+            if (exact && known) {
+              if (rr) { const ex = pos.x + dx * adv * sc, ey = pos.y + dy * adv * sc, cx = (pos.x + ex) / 2, cy = (pos.y + ey) / 2 + fsz * sc * 0.3; if (cx >= rr.x0 && cx <= rr.x1 && cy >= rr.y0 && cy <= rr.y1) hit = true; }
+              else for (let t = 0; t < targets.length; t++) { const T = targets[t]; const ddx = pos.x - T.x, ddy = pos.y - T.y, along = ddx * dirx + ddy * diry, across = -ddx * diry + ddy * dirx, tol = 0.4 * (T.fs || 10), runLen = adv * sc;
+                if (Math.abs(across) <= tol && along >= -1.5 && along + runLen <= T.w + Math.max(2, 0.25 * (T.fs || 10)) && along <= T.w + 1) { hit = true; done[t] += Math.max(0, runLen); break; } }
+            }
+            if (hit) { st.hits++; if (Tr === 3) st.invisible++; const adj = fsz && Th ? -adv / (fsz * Th) * 1000 : 0; edits.push({ start: o.start, end: o.end, repl: pre + '[' + fmt(adj) + '] TJ' }); }
+            if (known) { Tm = mul([1, 0, 0, 1, adv, 0], Tm); } else exact = false;
+            break; }
+          default: break;
+        }
+      }
+      return { edits };
     }
-    if (!edits.length) return { removed: 0, total: targets.length };
-    let outLen = 0; edits.sort((p, q) => p.start - q.start); const chunks = []; let last = 0; const enc = new TextEncoder();
-    for (const e of edits) { chunks.push(bytes.subarray(last, e.start)); chunks.push(enc.encode(e.repl)); last = e.end; } chunks.push(bytes.subarray(last));
-    chunks.forEach(c => outLen += c.length); const out = new Uint8Array(outLen); let p = 0; chunks.forEach(c => { out.set(c, p); p += c.length; });
-    const stream = ctx.flateStream(out); page.node.set(PL.PDFName.of('Contents'), ctx.register(stream));
-    // an item counts as removed when ≥ 90% of its width was deleted
-    let removed = 0; targets.forEach((T, t) => { if (T.w <= 0 || done[t] >= 0.9 * T.w) removed++; });
-    return { removed, total: targets.length, ops: edits.length };
+    const bytes = syncStreamBytes(PL, doc, page); let res = page.node.Resources && page.node.Resources(); if (!res && page.node.getInheritableAttribute) res = page.node.getInheritableAttribute(N('Resources')); res = ctx.lookup(res);
+    const fonts = res && ctx.lookup(res.get(N('Font')));
+    const { edits } = run(bytes, fonts, res, [1, 0, 0, 1, 0, 0], 0);
+    if (edits.length) { const stream = ctx.flateStream(applyEdits(bytes, edits)); page.node.set(N('Contents'), ctx.obj([ctx.register(stream)]));
+      page.contentStream = undefined; page.contentStreamRef = undefined; } // pdf-lib caches its append-stream; it is no longer part of Contents, so later drawing would be lost
+    if (!edits.length && !st.formsPatched) return { removed: 0, total: targets.length };
+    let removed = 0; targets.forEach((T, t) => { if (T.w <= 0 || done[t] >= 0.9 * T.w) removed++; }); // counts as removed when >= 90% of its width was deleted
+    return { removed, total: targets.length, ops: edits.length, invisible: st.invisible, hits: st.hits, forms: st.formsPatched };
   }
   function syncStreamBytes(PL, doc, page) {
     const ctx = doc.context; let c = ctx.lookup(page.node.get(PL.PDFName.of('Contents'))); const parts = [];
-    const dec = s => (s instanceof PL.PDFRawStream) ? PL.decodePDFRawStream(s).decode() : (s.getUnencodedContents ? s.getUnencodedContents() : s.getContents());
-    if (c instanceof PL.PDFArray) { for (let k = 0; k < c.size(); k++) parts.push(dec(ctx.lookup(c.get(k)))); } else if (c) parts.push(dec(c));
+    if (c instanceof PL.PDFArray) { for (let k = 0; k < c.size(); k++) parts.push(decodeStream(PL, ctx.lookup(c.get(k)))); } else if (c) parts.push(decodeStream(PL, c));
     let len = 0; parts.forEach(q => len += q.length + 1); const out = new Uint8Array(len); let o = 0; parts.forEach(q => { out.set(q, o); o += q.length; out[o++] = 10; }); return out;
   }
   C._tokenize = tokenize;
