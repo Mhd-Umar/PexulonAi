@@ -381,3 +381,8 @@ textarea.ped-editor { background: var(--ped-bg, #fff) !important; color: var(--p
 .aigrid .tcard.ai .ticon { background: var(--accent-soft); color: var(--accent); box-shadow: none; }
 
 .skip-link { position: fixed; z-index: 1000; left: 12px; top: 12px; transform: translateY(-160%); padding: 10px 14px; border-radius: 8px; background: var(--ink); color: var(--bg); text-decoration: none; } .skip-link:focus { transform: translateY(0); }
+
+/* ask box follows the theme (fixes a white card with a dark input in dark mode) */
+.askbox { background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow); }
+.askbox input { color: var(--ink); background: var(--bg); }
+.askbox input::placeholder { color: var(--ink-3); }
