@@ -39,15 +39,15 @@ exports.handler = async (event) => {
 
   if (!process.env.GEMINI_API_KEY) return json(503, { error: 'AI is not configured. Add GEMINI_API_KEY or GROQ_API_KEY in Netlify → Environment variables, then redeploy.' });
   const key = String(process.env.GEMINI_API_KEY).trim();
-  const candidates = [...new Set([process.env.AI_MODEL, 'gemini-2.5-flash-lite', 'gemini-flash-lite-latest'].filter(Boolean))];
+  const candidates = [...new Set([process.env.AI_MODEL, 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-flash-lite-latest', 'gemini-flash-latest'].filter(Boolean))], started = Date.now();
   let lastStatus = 502, lastMessage = '';
   for (let i = 0; i < candidates.length; i++) {
-    const model = candidates[i];
+    const model = candidates[i], left = 9200 - (Date.now() - started); if (i > 0 && left < 1800) break;
     const payload = { contents: messages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })), generationConfig: { maxOutputTokens: maxTokens, temperature } };
     if (system) payload.systemInstruction = { parts: [{ text: system }] };
     if (/^gemini-2\.5/.test(model)) payload.generationConfig.thinkingConfig = { thinkingBudget: 0 };
     try {
-      const r = await fetchWithTimeout('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(payload) }, 6900);
+      const r = await fetchWithTimeout('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(payload) }, Math.max(1500, Math.min(6900, left)));
       const d = await r.json().catch(() => ({}));
       if (r.ok) {
         const answer = (d.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim();
@@ -57,11 +57,12 @@ exports.handler = async (event) => {
       lastStatus = r.status; lastMessage = clip(d.error?.message, 180);
       if (r.status === 401 || r.status === 403) return json(502, { error: 'Gemini rejected the API key or its permissions. Check GEMINI_API_KEY in Netlify.' });
       if (r.status === 429) return json(429, { error: 'Gemini free-tier quota is temporarily exhausted. Please wait and try again.' });
-      if (r.status !== 404) break;
+      if (![404, 500, 503].includes(r.status)) break; // busy or unknown model: try the next one
     } catch (e) {
       if (e.name === 'AbortError') return json(504, { error: 'Gemini took too long to respond. Try again in a moment, or configure GROQ_API_KEY as a backup provider.' });
       return json(502, { error: 'Could not connect to Gemini. Check the Netlify function logs and try again.' });
     }
   }
+   if (lastStatus === 503 || lastStatus === 500) return json(503, { error: 'The free AI is very busy right now. Please try again in a few seconds.' });
   return json(lastStatus >= 500 ? 503 : 502, { error: 'Gemini service error (' + lastStatus + ')' + (lastMessage ? ': ' + lastMessage : '. Please check the API key, enabled API and model name.') });
 };

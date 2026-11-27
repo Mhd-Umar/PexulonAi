@@ -18,19 +18,29 @@ async function run(event, stream) {
   const emit = s => { if (s) stream.write('data: ' + JSON.stringify({ text: s }) + '\n\n'); };
   let upstream;
   if (process.env.GEMINI_API_KEY) {
-    const model = process.env.AI_MODEL || 'gemini-2.5-flash';
     const contents = messages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
-    upstream = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':streamGenerateContent?alt=sse', {
-      method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': String(process.env.GEMINI_API_KEY).trim() },
-      body: JSON.stringify({ systemInstruction: system ? { parts: [{ text: system }] } : undefined, contents, generationConfig: { maxOutputTokens: maxTokens, temperature, ...(model.startsWith('gemini-2.5-flash') ? { thinkingConfig: { thinkingBudget: 0 } } : {}) } })
-    });
+    const models = [...new Set([process.env.AI_MODEL, 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-flash-latest', 'gemini-flash-lite-latest'].filter(Boolean))], started = Date.now();
+    for (const model of models) {
+      const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 6500);
+      try {
+        upstream = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':streamGenerateContent?alt=sse', {
+          method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': String(process.env.GEMINI_API_KEY).trim() }, signal: ctl.signal,
+          body: JSON.stringify({ systemInstruction: system ? { parts: [{ text: system }] } : undefined, contents, generationConfig: { maxOutputTokens: maxTokens, temperature, ...(/^gemini-2\.5-flash/.test(model) ? { thinkingConfig: { thinkingBudget: 0 } } : {}) } })
+        });
+      } catch (e) { upstream = null; } finally { clearTimeout(timer); }
+      if (upstream && upstream.ok) break;
+      if (upstream && ![404, 500, 503].includes(upstream.status)) break; // bad key / quota: no point trying other models
+      if (Date.now() - started > 8000) break;
+    }
+    if (!upstream) return json(503, { error: 'The free AI is very busy right now. Please try again in a few seconds.' });
   } else if (process.env.GROQ_API_KEY) {
     const model = process.env.AI_MODEL || 'openai/gpt-oss-20b';
     upstream = await fetch('https://api.groq.com/openai/v1/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + String(process.env.GROQ_API_KEY).trim() }, body: JSON.stringify({ model, messages: [...(system ? [{ role: 'system', content: system }] : []), ...messages], max_tokens: maxTokens, temperature, stream: true }) });
   } else return json(503, { error: 'AI is not set up. Add GEMINI_API_KEY or GROQ_API_KEY in Netlify.' });
   if (!upstream.ok) {
     const detail = await upstream.text().catch(() => '');
-    return json(upstream.status === 429 ? 429 : 502, { error: upstream.status === 429 ? 'The free AI limit was reached. Try again in a minute.' : 'AI service error: ' + detail.slice(0, 240) });
+    let msg = ''; try { msg = (JSON.parse(detail).error || {}).message || ''; } catch (_) { msg = detail; }
+    return json(upstream.status === 429 ? 429 : (upstream.status === 503 ? 503 : 502), { error: upstream.status === 429 ? 'The free AI limit was reached. Try again in a minute.' : upstream.status === 503 ? 'The free AI is very busy right now. Please try again in a few seconds.' : 'AI service error (' + upstream.status + '): ' + String(msg).slice(0, 200) });
   }
   const reader = upstream.body.getReader(), decoder = new TextDecoder(); let buf = '';
   while (true) {
