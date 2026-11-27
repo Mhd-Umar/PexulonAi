@@ -130,14 +130,16 @@
           add(Math.min(c.width - band, x + w), y, band, hh);
         } catch (_) { return { color: '#000000', bg: '#ffffff' }; }
         if (!edge.length) return { color: '#000000', bg: '#ffffff' };
-        const avg = [0, 1, 2].map(ch => edge.reduce((sum, v) => sum + v[ch], 0) / edge.length);
-        const hx = a => '#' + a.map(v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
-        let far = null, fd = 0;
-        for (let i = 0; i < inkData.length; i += 4) {
-          const d = Math.abs(inkData[i] - avg[0]) + Math.abs(inkData[i + 1] - avg[1]) + Math.abs(inkData[i + 2] - avg[2]);
-          if (d > fd) { fd = d; far = [inkData[i], inkData[i + 1], inkData[i + 2]]; }
-        }
-        return { color: far && fd > 75 ? hx(far) : '#111111', bg: hx(avg) };
+        // page colour = the most common colour around AND inside the text box (so white text on a blue bar still reads as "blue background")
+        const bins = new Map(), q = v => v >> 3, put = (r, g, b2) => { const key = (q(r) << 10) | (q(g) << 5) | q(b2), c = bins.get(key); if (c) { c.n++; c.r += r; c.g += g; c.b += b2; } else bins.set(key, { n: 1, r, g, b: b2 }); };
+        edge.forEach(v => put(v[0], v[1], v[2])); for (let i = 0; i < inkData.length; i += 4) put(inkData[i], inkData[i + 1], inkData[i + 2]);
+        let top = null; bins.forEach(c => { if (!top || c.n > top.n) top = c; }); const avg = [top.r / top.n, top.g / top.n, top.b / top.n];
+        const hx = a2 => '#' + a2.map(v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
+        // text colour = the pixels that differ most from the page colour (ignore faint anti-aliasing: use the strongest 3% as the core of the strokes)
+        const dist = []; for (let i = 0; i < inkData.length; i += 4) { const d = Math.abs(inkData[i] - avg[0]) + Math.abs(inkData[i + 1] - avg[1]) + Math.abs(inkData[i + 2] - avg[2]); if (d > 90) dist.push([d, inkData[i], inkData[i + 1], inkData[i + 2]]); }
+        if (!dist.length) return { color: (avg[0] + avg[1] + avg[2]) / 3 > 140 ? '#111111' : '#ffffff', bg: hx(avg) };
+        dist.sort((p2, q2) => q2[0] - p2[0]); const core = dist.slice(0, Math.max(1, Math.ceil(dist.length * 0.12))); const col = [1, 2, 3].map(ix => core.reduce((sm, v) => sm + v[ix], 0) / core.length);
+        return { color: hx(col), bg: hx(avg) };
       }
 
       /* ───────── objects ───────── */
@@ -281,6 +283,7 @@
         if (k === 'size' && TEXTY(o)) { o.lineH = o.lineH * v / o.size; if (o.type === 'text') o.base0 = o.y + v * 0.95; o.size = v; }
         else if (k === 'align' && TEXTY(o)) { o.align = v; if (v !== 'left' && !o.maxW) o.maxW = o.type === 'edit' ? o.w : Math.max(o.w, 120); }
         else o[map[k]] = v;
+        if (k === 'color' && TEXTY(o)) o.colorUser = true;
         if (k === 'fill' && !v) delete o.fill; relayout(o, f.e); refreshLayer(f.e.id); renderOpts(); if (['fam', 'bold', 'italic'].includes(k)) useFont(o, f.e);
       }
       function renderOpts() {
