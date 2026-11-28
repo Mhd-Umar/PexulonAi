@@ -108,7 +108,7 @@
         if (e.text || e.src == null) return; const page = await S.pdf.getPage(e.src + 1), vp = page.getViewport({ scale: 1, rotation: e.rot }), tc = await page.getTextContent();
         const cls = {}, items = [];
         for (const it of tc.items) {
-          if (!it.str || !it.transform) continue; const m = S.pdfjs.Util.transform(vp.transform, it.transform), fs = Math.hypot(m[0], m[1]); if (!(fs > 0.5) || Math.abs(m[1]) > 0.2 * fs || Math.abs(m[2]) > 0.5 * fs || m[0] <= 0) continue;
+          if (!it.str || !it.str.trim() || !it.transform) continue; const m = S.pdfjs.Util.transform(vp.transform, it.transform), fs = Math.hypot(m[0], m[1]); if (!(fs > 0.5) || Math.abs(m[1]) > 0.2 * fs || Math.abs(m[2]) > 0.5 * fs || m[0] <= 0) continue;
           const st = tc.styles[it.fontName] || {}; if (!(it.fontName in cls)) { let info = {}, name = st.fontFamily || ''; try { if (page.commonObjs.has(it.fontName)) { const f = page.commonObjs.get(it.fontName); info = f || {}; name = (f && f.name) || name; } } catch (_) { } cls[it.fontName] = Core.classifyFont(name, Object.assign({ isSerifFont: /serif$/.test(st.fontFamily || '') && !/sans/.test(st.fontFamily || ''), isMonospace: /mono/.test(st.fontFamily || '') }, info)); }
           items.push({ str: it.str, x: m[4], y: m[5], w: it.width * (vp.scale || 1), fs, asc: st.ascent ?? 0.9, desc: st.descent ?? -0.2, font: it.fontName });
         }
@@ -137,9 +137,10 @@
         const hx = a2 => '#' + a2.map(v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
         // text colour = the pixels that differ most from the page colour (ignore faint anti-aliasing: use the strongest 3% as the core of the strokes)
         const dist = []; for (let i = 0; i < inkData.length; i += 4) { const d = Math.abs(inkData[i] - avg[0]) + Math.abs(inkData[i + 1] - avg[1]) + Math.abs(inkData[i + 2] - avg[2]); if (d > 90) dist.push([d, inkData[i], inkData[i + 1], inkData[i + 2]]); }
-        if (!dist.length) return { color: (avg[0] + avg[1] + avg[2]) / 3 > 140 ? '#111111' : '#ffffff', bg: hx(avg) };
+        const near = edge.filter(v => Math.abs(v[0] - avg[0]) + Math.abs(v[1] - avg[1]) + Math.abs(v[2] - avg[2]) < 36).length, uniform = near / edge.length >= 0.88; // flat colour around the text → a matching patch is invisible
+        if (!dist.length) return { color: (avg[0] + avg[1] + avg[2]) / 3 > 140 ? '#111111' : '#ffffff', bg: hx(avg), uniform };
         dist.sort((p2, q2) => q2[0] - p2[0]); const core = dist.slice(0, Math.max(1, Math.ceil(dist.length * 0.12))); const col = [1, 2, 3].map(ix => core.reduce((sm, v) => sm + v[ix], 0) / core.length);
-        return { color: hx(col), bg: hx(avg) };
+        return { color: hx(col), bg: hx(avg), uniform };
       }
 
       /* ───────── objects ───────── */
@@ -165,7 +166,7 @@
         let x0 = blk.x0, maxW = multi ? origW * 1.03 : 0; const M = 18; // keep centred/right text inside the page margins
         if (align === 'center') { const cx = (blk.x0 + blk.x1) / 2; maxW = multi ? origW * 1.03 : Math.max(origW, 2 * Math.min(cx, e.w - cx) - 2 * M); x0 = cx - maxW / 2; }
         else if (align === 'right') { maxW = multi ? origW * 1.03 : Math.max(origW, blk.x1 - M); x0 = blk.x1 - maxW; }
-        const o = { id: uid(), type: 'edit', key, x: blk.x0, y: blk.top, w: origW, h: blk.bottom - blk.top, bg: sm.bg, fam: cl.fam, bold: cl.bold, italic: cl.italic, size: Math.round(blk.fs * 10) / 10, color: sm.color, align, hs: 1, lineH: blk.pitch, base0: blk.lines[0].y, x0, maxW, text: blk.text, orig: blk.text, origSize: blk.fs, fresh: true, items: blk.lines.flatMap(l => l.items.map(i => ({ x: i.x, y: i.y, w: i.w, str: i.str, fs: i.fs }))) };
+        const o = { id: uid(), type: 'edit', key, x: blk.x0, y: blk.top, w: origW, h: blk.bottom - blk.top, bg: sm.bg, forceCover: !!sm.uniform, fam: cl.fam, bold: cl.bold, italic: cl.italic, size: Math.round(blk.fs * 10) / 10, color: sm.color, align, hs: 1, lineH: blk.pitch, base0: blk.lines[0].y, x0, maxW, text: blk.text, orig: blk.text, origSize: blk.fs, fresh: true, items: blk.lines.flatMap(l => l.items.map(i => ({ x: i.x, y: i.y, w: i.w, str: i.str, fs: i.fs }))) };
         relayout(o, e); useFont(o, e); return o;
       }
       function blocksOf(e) { if (!e.text) return []; return S.gran === 'line' ? e.text.lines.map(Core.lineAsBlock) : e.text.blocks; }

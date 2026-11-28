@@ -130,8 +130,8 @@
         msgs.push({ role: 'assistant', content: r }); await sleep(180); w.classList.remove('streaming'); await reveal(w, r);
       } catch (e) {
         msgs.pop(); w.classList.remove('streaming'); w.classList.add('error');
-        const partial = w.textContent.replace(/Searching the document…/, ''); w.replaceChildren(h('div', {}, '⚠ ' + (e.message || e)), partial.trim() && !/^\s*$/.test(partial) ? h('pre', { style: { whiteSpace: 'pre-wrap', marginTop: '8px' } }, partial) : null,
-          h('div', { style: { marginTop: '8px' } }, h('button', { type: 'button', class: 'btn sm', onclick: () => { w.remove(); ub.remove(); go(t); } }, 'Try again')));
+        const partial = w.textContent.replace(/Searching the document…/, ''); w.replaceChildren(...[h('div', {}, '⚠ ' + (e.message || e)), partial.trim() ? h('pre', { style: { whiteSpace: 'pre-wrap', marginTop: '8px' } }, partial) : null,
+          h('div', { style: { marginTop: '8px' } }, h('button', { type: 'button', class: 'btn sm', onclick: () => { w.remove(); ub.remove(); go(t); } }, 'Try again'))].filter(Boolean));
       } finally { busy = false; send.disabled = false; send.textContent = 'Send ➤'; inp.focus(); }
     };
     send.onclick = () => go(); inp.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); go(); } });
