@@ -179,7 +179,7 @@
         for (let j = i + 1; j < lines.length; j++) {
           if (used.has(j)) continue; const c = lines[j], dy = c.y - last.y;
           if (dy > 2.4 * last.fs) break; if (dy < 0.7 * last.fs) continue;
-          const same = Math.abs(c.fs - last.fs) <= 0.08 * last.fs && c.font === last.font, aligned = Math.abs(c.x0 - last.x0) <= 0.6 * last.fs || (b.length === 1 && c.x0 < last.x0 && last.x0 - c.x0 <= 3 * last.fs) || (b.length === 1 && c.x0 > last.x0 && c.x0 - last.x0 <= 3 * last.fs && Math.abs(c.x0 - last.x0) > 0.6 * last.fs);
+          const same = Math.abs(c.fs - last.fs) <= 0.08 * last.fs, aligned = Math.abs(c.x0 - last.x0) <= 0.9 * last.fs || (b.length === 1 && c.x0 < last.x0 && last.x0 - c.x0 <= 3 * last.fs) || (b.length === 1 && c.x0 > last.x0 && c.x0 - last.x0 <= 3 * last.fs && Math.abs(c.x0 - last.x0) > 0.6 * last.fs);
           const gapOk = pitch == null ? dy <= 1.9 * last.fs : Math.abs(dy - pitch) <= 0.3 * pitch;
           const lastFull = last.x1 - last.x0; const bw = Math.max(...b.map(l => l.x1 - l.x0));
           if (same && aligned && gapOk && !(lastFull < 0.55 * bw && b.length > 1)) { nxt = j; break; }
@@ -203,18 +203,22 @@
     async function applyObjs(page, e) {
       const map = C.vpToPdf(e.view, e.rot), rot = ((e.rot % 360) + 360) % 360, rect = (x, y, w, h) => { const a = map(x, y), b = map(x + w, y + h); return { x: Math.min(a[0], b[0]), y: Math.min(a[1], b[1]), w: Math.abs(a[0] - b[0]), h: Math.abs(a[1] - b[1]) }; };
       const rgbc = hx => PL.rgb(...C.hex(hx));
+      // pass 0: original images the user moved, replaced or deleted are taken out of the page first
+      { const hide = new Set(e.objs.filter(o => o.type === 'hideimg').map(o => o.idx)); if (hide.size && env.removeText) { try { env.removeText(PL, doc, page, [], { rot, hideImages: hide }); } catch (_) { } } }
       // pass 1: text edits (remove original, then draw)
+      const later = []; // every cover is painted first, then the new text, so a cover never hides text pushed into its area
       for (let o of e.objs.filter(o => o.type === 'edit')) {
-        let coveredNeeded = true;
+        let coveredNeeded = true; const ro = o.origBottom != null ? { x: o.ox0, y: o.origTop, w: o.ox1 - o.ox0, h: o.origBottom - o.origTop } : { x: o.x, y: o.y, w: o.w, h: o.h }; // the cover always sits where the ORIGINAL text was, even if the edited text was moved or pushed down
         if (env.removeText && o.items && o.items.length) {
           const targets = o.items.map(it => { const a = map(it.x, it.y); return { str: it.str, x: a[0], y: a[1], w: it.w, fs: it.fs, rot }; });
           try { const r = env.removeText(PL, doc, page, targets, { rot }); if (r && r.color && !o.colorUser) o = Object.assign({}, o, { color: r.color }); /* the exact colour the PDF used */ if (r && r.removed === targets.length && !(r.invisible > 0)) { coveredNeeded = false; report.removed++; } else report.covered++; } catch (err) { report.covered++; }
         } else report.covered++;
-        if (coveredNeeded && env.coverImage && o.items && o.items.length) { const ci = await env.coverImage(o, e); if (ci) { const emb = await doc.embedPng(ci.png), bl = map(ci.x, ci.y + ci.h); page.drawImage(emb, { x: bl[0], y: bl[1], width: ci.w, height: ci.h, rotate: PL.degrees(rot) }); } else if (o.bg) { const r = rect(o.x - 1, o.y - 1, o.w + 2, o.h + 2); page.drawRectangle({ x: r.x, y: r.y, width: r.w, height: r.h, color: rgbc(o.bg), borderWidth: 0 }); } }
-        else if (coveredNeeded && o.bg) { const r = rect(o.x - 1, o.y - 1, o.w + 2, o.h + 2); page.drawRectangle({ x: r.x, y: r.y, width: r.w, height: r.h, color: rgbc(o.bg), borderWidth: 0 }); }
-        else if (o.bg && o.forceCover) { const r = rect(o.x - 1, o.y - 1, o.w + 2, o.h + 2); page.drawRectangle({ x: r.x, y: r.y, width: r.w, height: r.h, color: rgbc(o.bg), borderWidth: 0 }); }
-        await drawTextBlock(page, e, o, map, rot, true);
+        if (coveredNeeded && env.coverImage && o.items && o.items.length) { const ci = await env.coverImage(Object.assign({}, o, ro), e); if (ci) { const emb = await doc.embedPng(ci.png), bl = map(ci.x, ci.y + ci.h); page.drawImage(emb, { x: bl[0], y: bl[1], width: ci.w, height: ci.h, rotate: PL.degrees(rot) }); } else if (o.bg) { const r = rect(ro.x - 1, ro.y - 1, ro.w + 2, ro.h + 2); page.drawRectangle({ x: r.x, y: r.y, width: r.w, height: r.h, color: rgbc(o.bg), borderWidth: 0 }); } }
+        else if (coveredNeeded && o.bg) { const r = rect(ro.x - 1, ro.y - 1, ro.w + 2, ro.h + 2); page.drawRectangle({ x: r.x, y: r.y, width: r.w, height: r.h, color: rgbc(o.bg), borderWidth: 0 }); }
+        else if (o.bg && o.forceCover) { const r = rect(ro.x - 1, ro.y - 1, ro.w + 2, ro.h + 2); page.drawRectangle({ x: r.x, y: r.y, width: r.w, height: r.h, color: rgbc(o.bg), borderWidth: 0 }); }
+        later.push(o);
       }
+      for (const o of later) await drawTextBlock(page, e, o, map, rot, true);
       for (const o of e.objs) {
         switch (o.type) {
           case 'edit': break;
@@ -238,7 +242,7 @@
       }
     }
     async function drawTextBlock(page, e, o, map, rot, isEdit) {
-      const lines = o.lines || C.layoutText(o.text, { fam: o.fam, bold: o.bold, italic: o.italic, size: o.size, hs: o.hs || 1, maxW: o.maxW || 0 }, metrics);
+      const linesAll = o.lines || C.layoutText(o.text, { fam: o.fam, bold: o.bold, italic: o.italic, size: o.size, hs: o.hs || 1, maxW: o.maxW || 0 }, metrics), lines = o.flowK != null ? linesAll.slice(0, o.flowK) : linesAll; // flowK: only the lines that still fit on this page
       if (!lines.length || !lines.join('').trim()) return;
       let fam = o.fam, encodable = lines.every(l => metrics.canEncode(l, fam, o.bold, o.italic));
       if (!encodable && env.ensureFont) { // the chosen font lacks a glyph (₹, ✓, arrows…): switch to a bundled font that has it, keeping real text
@@ -368,7 +372,7 @@
     const st = { invisible: 0, hits: 0, formsPatched: 0 }; const formsSeen = new Set();
     // process one content stream; `fonts` = its font dict, `res` = its resource dict, `ctm0` = starting matrix
     const hexOf = (r, g, b) => '#' + [r, g, b].map(v => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0')).join('');
-    const hits = [];
+    const hits = [], hideSet = opts.hideImages || null; let imgN = 0; // k-th image XObject drawn on the page (same order as the editor's image list)
     function run(bytes, fonts, res, ctm0, depth, fill0) {
       const ops = tokenize(bytes), cache = new Map(), edits = [], stack = [];
       let ctm = ctm0.slice(), Tm = [1, 0, 0, 1, 0, 0], Tlm = [1, 0, 0, 1, 0, 0], Tc = 0, Tw = 0, Th = 1, TL = 0, Ts = 0, fsz = 0, font = null, Tr = 0, exact = true, fill = fill0 || '#000000', fcs = 'DeviceGray';
@@ -403,6 +407,7 @@
             if (depth >= 4) break; const nm = a.find(x => x.t === 'name'); if (!nm || !res) break;
             try {
               const xd = ctx.lookup(res.get(N('XObject'))); const ref = xd && xd.get(N(nm.v)); const fo = ref && ctx.lookup(ref);
+              if (fo && fo.dict && /Image/.test(String(fo.dict.get(N('Subtype'))))) { if (hideSet && hideSet.has(imgN)) edits.push({ start: o.start, end: o.end, repl: '' }); imgN++; break; }
               if (!fo || !fo.dict || !/Form/.test(String(fo.dict.get(N('Subtype')))) || formsSeen.has(ref)) break; formsSeen.add(ref);
               const mArr = ctx.lookup(fo.dict.get(N('Matrix'))), m = mArr && mArr.size && mArr.size() === 6 ? [0, 1, 2, 3, 4, 5].map(k => { const v = ctx.lookup(mArr.get(k)); return v && v.asNumber ? v.asNumber() : 0; }) : [1, 0, 0, 1, 0, 0];
               const fres = ctx.lookup(fo.dict.get(N('Resources'))) || res, ffonts = fres && ctx.lookup(fres.get(N('Font'))) || fonts;
