@@ -409,7 +409,7 @@ body { background: radial-gradient(900px 380px at 50% -140px, color-mix(in srgb,
 .topbar { background: color-mix(in srgb, var(--bg) 78%, transparent); backdrop-filter: saturate(1.4) blur(14px); }
 .topbar .wrap { height: 60px; }
 .brand { font-size: 19px; font-weight: 750; }
-.brand-mark { width: 32px; height: 32px; border-radius: 10px; background: var(--grad); color: #fff; font-weight: 800; font-size: 18px; box-shadow: 0 8px 18px -8px var(--accent); }
+.brand-mark { width: 32px; height: 32px; border-radius: 9px; background: none; box-shadow: 0 6px 14px -8px var(--accent); display: block; }
 .icon-btn { border-radius: 12px; background: var(--surface); }
 .icon-btn:hover { border-color: var(--accent); }
 .hero2, .hero { position: relative; }
