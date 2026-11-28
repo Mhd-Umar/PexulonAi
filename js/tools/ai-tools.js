@@ -31,7 +31,7 @@
   /* ── result box ── */
   function outBox(md = true) {
     const body = h('div', { class: 'ai-out md' }), status = h('div', { class: 'ai-status' }), live = liveRenderer(body, md); let raw = '';
-    const wrap = h('div', { class: 'ai-result' }, status, body, h('div', { class: 'btns', style: { marginTop: '10px' } }, ui.btn('Copy', () => ui.copyText(raw)), ui.btn('Download .txt', () => ui.download(raw, 'pexulon-result.txt', 'text/plain')), ui.btn('Download .md', () => ui.download(raw, 'pexulon-result.md', 'text/markdown'))));
+    const wrap = h('div', { class: 'ai-result' }, status, body, h('div', { class: 'btns', style: { marginTop: '10px' } }, ui.btn('Copy', () => ui.copyText(raw)), ui.btn('Download PDF', () => TN.downloadPdf(raw, 'pexulon-result', 'Pexulon AI result')), ui.btn('Download .txt', () => ui.download(raw, 'pexulon-result.txt', 'text/plain')), ui.btn('Download .md', () => ui.download(raw, 'pexulon-result.md', 'text/markdown'))));
     wrap.style.display = 'none';
     return { el: wrap,
       status(t) { wrap.style.display = ''; status.textContent = t || ''; status.style.display = t ? '' : 'none'; },
@@ -113,7 +113,7 @@
     const scroll = b => b.scrollIntoView({ block: 'nearest' });
     const add = (role, t) => { const b = h('div', { class: 'msg ' + role }); if (role === 'user') b.append(t); log.append(b); scroll(b); return b; };
     const thinking = () => { const b = h('div', { class: 'msg assistant' }); b.innerHTML = '<span class="dots"><i></i><i></i><i></i></span>'; log.append(b); scroll(b); return b; };
-    const actions = (b, text) => b.append(h('div', { class: 'msg-actions' }, h('button', { type: 'button', class: 'btn sm', onclick: () => ui.copyText(text) }, 'Copy'), h('button', { type: 'button', class: 'btn sm', onclick: () => go('Continue exactly from where you stopped, without repeating anything.') }, 'Continue'), h('button', { type: 'button', class: 'btn sm', onclick: () => ui.download(text, 'pexulon-answer.md', 'text/markdown') }, 'Save')));
+    const actions = (b, text) => b.append(h('div', { class: 'msg-actions' }, h('button', { type: 'button', class: 'btn sm', onclick: () => ui.copyText(text) }, 'Copy'), h('button', { type: 'button', class: 'btn sm', onclick: () => go('Continue exactly from where you stopped, without repeating anything.') }, 'Continue'), h('button', { type: 'button', class: 'btn sm', onclick: () => TN.downloadPdf(text, 'pexulon-answer', 'Pexulon AI answer') }, 'PDF'), h('button', { type: 'button', class: 'btn sm', onclick: () => ui.download(text, 'pexulon-answer.md', 'text/markdown') }, 'Save')));
     async function reveal(b, text) {
       await paint(b, text); actions(b, text);
       b.querySelectorAll('pre').forEach(pr => { const code = pr.textContent; pr.append(h('button', { type: 'button', class: 'btn sm copy-code', onclick: () => ui.copyText(code) }, 'Copy')); }); scroll(b);
