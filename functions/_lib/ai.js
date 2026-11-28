@@ -35,12 +35,25 @@ export function modelList(env, streaming = false) {
   return [...new Set([env.AI_MODEL, ...defaults].filter(Boolean))];
 }
 
+// Gemini rejects (400) histories that start with a model turn, repeat a role or contain empty text
+function normalizeTurns(messages) {
+  const out = [];
+  for (const m of messages || []) {
+    const role = m.role === 'assistant' ? 'model' : 'user', text = String(m.content ?? '').trim();
+    if (!text) continue;
+    if (!out.length && role === 'model') continue;
+    if (out.length && out[out.length - 1].role === role) out[out.length - 1].parts[0].text += '\n\n' + text;
+    else out.push({ role, parts: [{ text }] });
+  }
+  return out.length ? out : [{ role: 'user', parts: [{ text: '.' }] }];
+}
+
 export function geminiPayload(input) {
   const generationConfig = { maxOutputTokens: input.maxTokens, temperature: input.temperature };
-  if (/gemini-2\.5-flash|flash-latest|flash-lite-latest/.test(input.model || '')) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  if (!input.noThink && /gemini-2\.5-flash/.test(input.model || '')) generationConfig.thinkingConfig = { thinkingBudget: 0 };
   return {
     ...(input.system ? { systemInstruction: { parts: [{ text: input.system }] } } : {}),
-    contents: input.messages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
+    contents: normalizeTurns(input.messages),
     generationConfig
   };
 }
