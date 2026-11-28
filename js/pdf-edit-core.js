@@ -205,6 +205,8 @@
       const rgbc = hx => PL.rgb(...C.hex(hx));
       // pass 0: original images the user moved, replaced or deleted are taken out of the page first
       { const hide = new Set(e.objs.filter(o => o.type === 'hideimg').map(o => o.idx)); if (hide.size && env.removeText) { try { env.removeText(PL, doc, page, [], { rot, hideImages: hide }); } catch (_) { } } }
+      // safety net: whatever way the picture is stored in the file, its old place is painted over with the page colour, so it can never stay visible behind the moved / deleted copy
+      for (const o of e.objs.filter(o => o.type === 'hideimg' && o.rect && env.coverImage)) { try { const r = o.rect, ci = await env.coverImage({ items: [1], x: r.x, y: r.y, w: r.w, h: r.h, ox0: r.x, ox1: r.x + r.w, origTop: r.y, origBottom: r.y + r.h }, e); if (ci) { const emb = await doc.embedPng(ci.png), bl = map(ci.x, ci.y + ci.h); page.drawImage(emb, { x: bl[0], y: bl[1], width: ci.w, height: ci.h, rotate: PL.degrees(rot) }); } } catch (_) { } }
       // pass 1: text edits (remove original, then draw)
       const later = []; // every cover is painted first, then the new text, so a cover never hides text pushed into its area
       for (let o of e.objs.filter(o => o.type === 'edit')) {

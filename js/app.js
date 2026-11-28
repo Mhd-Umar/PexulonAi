@@ -204,7 +204,7 @@
       });
       if (!response.ok || !response.body) {
         const detail = await response.json().catch(() => ({}));
-        if ([404, 501, 502, 503, 504].includes(response.status)) {
+        if (response.status >= 500 || [404, 405, 408, 429].includes(response.status)) {
           const answer = await TN.ai.ask({ system, messages: input, maxTokens, temperature });
           onChunk(answer, answer); return answer;
         }
@@ -278,7 +278,7 @@
   function showHome(catId) {
     document.body.classList.remove('editor-mode'); document.title = SITE + ' — free tools that run in your browser';
     const results = h('div'), chips = h('div', { class: 'chips', role: 'navigation', 'aria-label': 'Categories' });
-    const search = h('input', { type: 'search', placeholder: 'Search 90+ tools — e.g. "edit pdf", "emi", "qr", "resistor"', 'aria-label': 'Search tools', autocomplete: 'off', value: TN.store.get('q', '') });
+    const search = h('input', { type: 'search', placeholder: 'Search tools: edit pdf, emi, qr…', 'aria-label': 'Search tools', autocomplete: 'off', value: TN.store.get('q', '') });
     function draw() {
       const q = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean); results.replaceChildren();
       chips.replaceChildren(h('a', { class: 'chip', href: '#/', 'aria-current': String(!catId) }, 'All'), ...TN.cats.map(c => h('a', { class: 'chip', href: '#/c/' + c.id, 'aria-current': String(catId === c.id) }, c.icon + ' ' + c.name)));
@@ -318,7 +318,7 @@
         askForm(),
         h('div', { class: 'asksugg' }, [['Summarize', 'ai-summarize'], ['Translate', 'ai-translate'], ['Chat with PDF', 'ai-pdf-chat'], ['Write email', 'ai-email'], ['Quiz maker', 'ai-quiz']].map(([n, id]) => h('a', { href: '#/t/' + id }, n))),
         h('div', { class: 'badges' }, h('span', { class: 'badge' }, '🔒 Files never uploaded'), h('span', { class: 'badge' }, '∞ No daily limits'))),
-      h('div', { class: 'searchbox' }, h('span', { class: 'mag', 'aria-hidden': 'true' }, '🔍'), search), chips, results));
+      h('div', { class: 'searchbox' }, h('span', { class: 'mag', 'aria-hidden': 'true', html: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>' }), search), chips, results));
     draw();
   }
 
