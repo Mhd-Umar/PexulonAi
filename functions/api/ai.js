@@ -3,11 +3,11 @@ import { json, validateRequest, parseBody, modelList, geminiPayload } from '../_
 export async function onRequestPost({ request, env }) {
   let raw;
   try { raw = await request.text(); } catch { return json(400, { error: 'Invalid request data.' }); }
-  const invalid = validateRequest(request, env, raw, 80000);
+  const invalid = validateRequest(request, env, raw, 700000);
   if (invalid) return invalid;
   let body;
   try { body = JSON.parse(raw || '{}'); } catch { return json(400, { error: 'Invalid request data.' }); }
-  const input = parseBody(body, 8, 12000);
+  const input = parseBody(body, 12, 450000);
   if (input.error) return json(400, { error: input.error });
 
   const key = String(env.GEMINI_API_KEY || '').trim();
@@ -16,12 +16,12 @@ export async function onRequestPost({ request, env }) {
   let lastStatus = 502, lastMessage = '';
   for (const model of modelList(env, false)) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 18000);
+    const timer = setTimeout(() => controller.abort(), 60000);
     try {
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
-        body: JSON.stringify(geminiPayload(input)),
+        body: JSON.stringify(geminiPayload({ ...input, model })),
         signal: controller.signal
       });
       const data = await response.json().catch(() => ({}));

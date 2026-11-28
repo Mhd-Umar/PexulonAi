@@ -3,11 +3,11 @@ import { json, validateRequest, parseBody, modelList, geminiPayload } from '../_
 export async function onRequestPost({ request, env }) {
   let raw;
   try { raw = await request.text(); } catch { return json(400, { error: 'Bad request.' }); }
-  const invalid = validateRequest(request, env, raw, 120000);
+  const invalid = validateRequest(request, env, raw, 700000);
   if (invalid) return invalid;
   let body;
   try { body = JSON.parse(raw || '{}'); } catch { return json(400, { error: 'Bad request.' }); }
-  const input = parseBody(body, 14, 40000);
+  const input = parseBody(body, 16, 450000);
   if (input.error) return json(400, { error: 'Nothing to send.' });
   const key = String(env.GEMINI_API_KEY || '').trim();
   if (!key) return json(503, { error: 'Gemini is not configured. Add GEMINI_API_KEY under Pages Settings → Variables and Secrets, then redeploy.' });
@@ -15,12 +15,12 @@ export async function onRequestPost({ request, env }) {
   let upstream = null, lastStatus = 502, lastMessage = '';
   for (const model of modelList(env, true)) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15000);
+    const timer = setTimeout(() => controller.abort(), 30000);
     try {
       upstream = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-goog-api-key': key, 'accept': 'text/event-stream' },
-        body: JSON.stringify(geminiPayload(input)),
+        body: JSON.stringify(geminiPayload({ ...input, model })),
         signal: controller.signal
       });
       clearTimeout(timer);
