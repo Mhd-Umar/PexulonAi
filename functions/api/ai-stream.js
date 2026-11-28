@@ -13,14 +13,15 @@ export async function onRequestPost({ request, env }) {
   if (!key) return json(503, { error: 'Gemini is not configured. Add GEMINI_API_KEY under Pages Settings → Variables and Secrets, then redeploy.' });
 
   let upstream = null, lastStatus = 502, lastMessage = '';
-  for (const model of modelList(env, true)) {
+  for (const [model, noThink] of modelList(env, true).flatMap(m => [[m, false], [m, true]])) {
+    if (noThink && lastStatus !== 400) continue;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), Math.min(28000, 9000 + raw.length / 20));
     try {
       upstream = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-goog-api-key': key, 'accept': 'text/event-stream' },
-        body: JSON.stringify(geminiPayload({ ...input, model })),
+        body: JSON.stringify(geminiPayload({ ...input, model, noThink })),
         signal: controller.signal
       });
       clearTimeout(timer);
@@ -30,7 +31,7 @@ export async function onRequestPost({ request, env }) {
       lastMessage = String(detail.error?.message || '').slice(0, 180);
       if (upstream.status === 401 || upstream.status === 403) return json(502, { error: 'Gemini rejected the API key or its permissions. Check the GEMINI_API_KEY Secret.' });
       if (upstream.status === 429) return json(429, { error: 'Gemini free-tier quota is temporarily exhausted. Please wait and try again.' });
-      if (![404, 500, 503].includes(upstream.status)) break;
+      if (![400, 404, 500, 503].includes(upstream.status)) break;
     } catch (error) {
       clearTimeout(timer);
       lastStatus = error?.name === 'AbortError' ? 504 : 502; lastMessage = error?.name === 'AbortError' ? 'model did not answer in time' : 'could not connect'; upstream = null; continue; // try the next model
