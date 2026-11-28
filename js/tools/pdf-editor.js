@@ -15,7 +15,7 @@
     id: 'pdf-editor', cat: 'pdf', icon: '✏️', name: 'PDF Editor — edit existing text', isNew: true, full: true,
     desc: 'Change the real text inside a PDF, add text, whiteout, redact, highlight, draw, sign and organise pages. Runs on your device.',
     tags: 'edit pdf text change modify sejda annotate sign redact whiteout highlight erase replace fill', render(root) {
-      const S = { name: 'document', bytes: null, pdf: null, pdfjs: null, PL: null, metrics: null, ents: new Map(), order: [], cur: 0, z: 1, tool: 'edit', sel: null, undo: [], redo: [], assets: {}, gran: 'block', showAll: false, dirty: false, nid: 1, sty: { fam: 'Helvetica', size: 12, bold: false, italic: false, underline: false, color: '#000000', align: 'left', stroke: '#d62828', sw: 2, fill: '', hl: '#ffeb3b', wo: '#ffffff' } };
+      const S = { name: 'document', bytes: null, pdf: null, pdfjs: null, PL: null, metrics: null, ents: new Map(), order: [], cur: 0, z: 1, tool: 'edit', sel: null, undo: [], redo: [], assets: {}, gran: 'block', reflow: true, showAll: false, dirty: false, nid: 1, sty: { fam: 'Helvetica', size: 12, bold: false, italic: false, underline: false, color: '#000000', align: 'left', stroke: '#d62828', sw: 2, fill: '', hl: '#ffeb3b', wo: '#ffffff' } };
       const uid = () => 'o' + (S.nid++);
       const E = id => S.ents.get(id);
       const live = () => S.order.map(E);
@@ -113,6 +113,7 @@
           items.push({ str: it.str, x: m[4], y: m[5], w: it.width * (vp.scale || 1), fs, asc: st.ascent ?? 0.9, desc: st.descent ?? -0.2, font: it.fontName });
         }
         const lines = Core.groupLines(items), blocks = Core.groupBlocks(lines); e.text = { lines, blocks, cls };
+        try { e.imgs = await detectImages(page, vp); } catch (err) { console.warn('image scan failed', err); e.imgs = []; }
       }
       function sample(e, b) { // estimate ink from text pixels and page colour from the surrounding margin
         const c = e.canvas; if (!c) return { color: '#000000', bg: '#ffffff' };
@@ -166,15 +167,99 @@
         let x0 = blk.x0, maxW = multi ? origW * 1.03 : 0; const M = 18; // keep centred/right text inside the page margins
         if (align === 'center') { const cx = (blk.x0 + blk.x1) / 2; maxW = multi ? origW * 1.03 : Math.max(origW, 2 * Math.min(cx, e.w - cx) - 2 * M); x0 = cx - maxW / 2; }
         else if (align === 'right') { maxW = multi ? origW * 1.03 : Math.max(origW, blk.x1 - M); x0 = blk.x1 - maxW; }
-        const o = { id: uid(), type: 'edit', key, x: blk.x0, y: blk.top, w: origW, h: blk.bottom - blk.top, bg: sm.bg, forceCover: !!sm.uniform, fam: cl.fam, bold: cl.bold, italic: cl.italic, size: Math.round(blk.fs * 10) / 10, color: sm.color, align, hs: 1, lineH: blk.pitch, base0: blk.lines[0].y, x0, maxW, text: blk.text, orig: blk.text, origSize: blk.fs, fresh: true, items: blk.lines.flatMap(l => l.items.map(i => ({ x: i.x, y: i.y, w: i.w, str: i.str, fs: i.fs }))) };
+        const o = { id: uid(), type: 'edit', key, x: blk.x0, y: blk.top, w: origW, h: blk.bottom - blk.top, bg: sm.bg, forceCover: !!sm.uniform, fam: cl.fam, bold: cl.bold, italic: cl.italic, size: Math.round(blk.fs * 10) / 10, color: sm.color, align, hs: 1, lineH: blk.pitch, base0: blk.lines[0].y, x0, maxW, text: blk.text, orig: blk.text, origSize: blk.fs, origTop: blk.top, origBottom: blk.bottom, ox0: blk.x0, ox1: blk.x1, origLines: blk.lines.length, shift: 0, fresh: true, items: blk.lines.flatMap(l => l.items.map(i => ({ x: i.x, y: i.y, w: i.w, str: i.str, fs: i.fs }))) };
         relayout(o, e); useFont(o, e); return o;
+      }
+      /* ───────── pictures already inside the PDF ───────── */
+      async function detectImages(page, vp) {
+        const ops = await page.getOperatorList(), O = S.pdfjs.OPS, U = S.pdfjs.Util, out = []; let ctm = [1, 0, 0, 1, 0, 0], k = 0; const stack = [];
+        const mul = (a, b) => [a[0] * b[0] + a[1] * b[2], a[0] * b[1] + a[1] * b[3], a[2] * b[0] + a[3] * b[2], a[2] * b[1] + a[3] * b[3], a[4] * b[0] + a[5] * b[2] + b[4], a[4] * b[1] + a[5] * b[3] + b[5]];
+        for (let i = 0; i < ops.fnArray.length; i++) {
+          const fn = ops.fnArray[i], a = ops.argsArray[i];
+          if (fn === O.save) stack.push(ctm.slice()); else if (fn === O.restore) { if (stack.length) ctm = stack.pop(); }
+          else if (fn === O.transform) ctm = mul(a, ctm);
+          else if (fn === O.paintFormXObjectBegin) { stack.push(ctm.slice()); if (a && a[0]) ctm = mul(a[0], ctm); }
+          else if (fn === O.paintFormXObjectEnd) { if (stack.length) ctm = stack.pop(); }
+          else if (fn === O.paintImageXObject || fn === O.paintImageMaskXObject) {
+            const ap = (p, m) => [m[0] * p[0] + m[2] * p[1] + m[4], m[1] * p[0] + m[3] * p[1] + m[5]], pts = [[0, 0], [1, 0], [1, 1], [0, 1]].map(p => ap(ap(p, ctm), vp.transform)), xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+            const x = Math.min(...xs), y = Math.min(...ys), w = Math.max(...xs) - x, hh = Math.max(...ys) - y; if (w >= 6 && hh >= 6 && w * hh < 0.85 * vp.width * vp.height) out.push({ k, x, y, w, h: hh }); k++;
+          }
+        }
+        return out;
+      }
+      async function liftImage(e, k) { // turn a picture of the PDF into a movable / resizable / replaceable object
+        const im = (e.imgs || []).find(v => v.k === k); if (!im) return; status.textContent = 'Preparing the picture…';
+        try {
+          const page = await S.pdf.getPage(e.src + 1), sc = Math.max(1.5, Math.min(4, 1800 / Math.max(im.w, im.h))), vp = page.getViewport({ scale: sc, rotation: e.rot }), full = h('canvas');
+          full.width = Math.ceil(vp.width); full.height = Math.ceil(vp.height); await page.render({ canvasContext: full.getContext('2d'), viewport: vp }).promise;
+          const c = h('canvas'); c.width = Math.max(1, Math.round(im.w * sc)); c.height = Math.max(1, Math.round(im.h * sc)); c.getContext('2d').drawImage(full, im.x * sc, im.y * sc, im.w * sc, im.h * sc, 0, 0, c.width, c.height);
+          const data = new Uint8Array(await (await new Promise(r => c.toBlob(r, 'image/png'))).arrayBuffer()), id = 'a' + (S.nid++); S.assets[id] = { mime: 'image/png', data, url: URL.createObjectURL(new Blob([data], { type: 'image/png' })) };
+          pushUndo(); const o = { id: uid(), type: 'image', asset: id, x: im.x, y: im.y, w: im.w, h: im.h }; e.objs.push({ id: uid(), type: 'hideimg', idx: k }, o); S.sel = { oid: o.id }; refreshLayer(e.id); renderOpts(); status.textContent = 'Picture selected: drag to move, pull the corner to resize, 🔄 to replace it, 🗑 to delete it.';
+        } catch (err) { console.error(err); ui.toast('Could not open that picture'); }
+      }
+      function replaceImage(o) {
+        const inp = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', style: { display: 'none' } }); document.body.append(inp);
+        inp.onchange = async () => { const f = inp.files[0]; inp.remove(); if (!f) return; try {
+          const bm = await createImageBitmap(f); let data, mime; if (/^image\/(png|jpeg)$/.test(f.type)) { data = new Uint8Array(await f.arrayBuffer()); mime = f.type; } else { const c = h('canvas'); c.width = bm.width; c.height = bm.height; c.getContext('2d').drawImage(bm, 0, 0); data = new Uint8Array(await (await new Promise(r => c.toBlob(r, 'image/png'))).arrayBuffer()); mime = 'image/png'; }
+          const id = 'a' + (S.nid++); S.assets[id] = { mime, data, url: URL.createObjectURL(new Blob([data], { type: mime })) }; const ff = find(o.id); if (!ff) return; pushUndo(); ff.o.asset = id; ff.o.h = ff.o.w * bm.height / bm.width; refreshLayer(ff.e.id); renderOpts();
+        } catch (_) { ui.toast('Could not read that image'); } };
+        inp.click();
+      }
+      /* Word-like flow: when an edit adds or removes lines, the text below moves with it and, at the end of a page, continues on the next page */
+      let flowBusy = false, flowAgain = false;
+      async function reflowAll() {
+        if (!S.reflow) return; if (flowBusy) { flowAgain = true; return; } flowBusy = true;
+        try { do { flowAgain = false; await reflowRun(); } while (flowAgain); } catch (err) { console.error('reflow failed', err); } finally { flowBusy = false; }
+        refreshAll(); buildSide();
+      }
+      async function reflowRun() {
+        // 0. forget everything the flow made earlier
+        const gone = S.order.filter(id => E(id) && E(id).auto); if (gone.length) { S.order = S.order.filter(id => !gone.includes(id)); }
+        for (const e of live()) { if (!e) continue; e.objs = e.objs.filter(x => !(x.flowed || (x.type === 'edit' && x.followOf && x.text === x.orig))); e.objs.forEach(x => { if (x.type === 'edit') delete x.flowK; }); }
+        const lhOf = x => x.lineH || x.size * 1.2; let carry = [], carryStyle = null, structural = gone.length > 0, lastLimit = null, lastTop = null, lastPi = -1, toast = false;
+        S.order.forEach((id, i) => { const e = E(id); if (e && !e.deleted && e.objs.some(x => x.type === 'edit' && x.origBottom != null)) lastPi = i; });
+        for (let pi = 0; pi < S.order.length; pi++) {
+          const e = E(S.order[pi]); if (!e || e.deleted) continue; const users0 = e.objs.filter(x => x.type === 'edit' && x.origBottom != null);
+          if (!users0.length && !carry.length) continue; if (pi > lastPi && !carry.length) break;
+          if (e.src != null) await loadText(e); if (!e.text) e.text = { lines: [], blocks: [], cls: {} };
+          const H = e.h, body = e.text.blocks.filter(b => b.top > H * 0.07 && b.bottom < H * 0.93);
+          const topM = body.length ? Math.min(...body.map(b => b.top)) : (lastTop ?? 56), limit = Math.max(H - Math.max(topM, 40), ...body.map(b => b.bottom), ...users0.map(u => u.origBottom)); lastLimit = limit; lastTop = topM;
+          // a. text carried over from the previous page goes to the top of this one
+          let cy = topM, prevBottom = null, carryH = 0; const placed = [];
+          for (const c of carry) { const o = Object.assign({}, c.proto, { id: uid(), type: 'text', flowed: true, text: c.text, fresh: false, items: undefined, orig: undefined, origBottom: undefined, flowK: undefined }); const gap = prevBottom == null ? 0 : Math.min(30, Math.max(0, c.gap)); relayout(o, e); o.base0 = cy + gap + o.size * 0.95; relayout(o, e); cy = o.y + o.h; prevBottom = cy; e.objs.push(o); placed.push(o); }
+          carryH = placed.length ? cy - topM + 14 : 0; carry = [];
+          // b. edits on this page push the text below them (and the carried text pushes everything)
+          const users = e.objs.filter(x => x.type === 'edit' && x.origBottom != null && !(x.origTop > H * 0.93)), virt = carryH ? [{ origBottom: topM - 1, ox0: 0, ox1: e.w, __g: carryH }] : [];
+          const g = new Map(users.map(x => [x, ((x.lines ? x.lines.length : 1) - (x.origLines || 1)) * lhOf(x)])); virt.forEach(v => g.set(v, v.__g));
+          const srcs = [...users, ...virt], hits = (top, x0, x1, u) => top >= u.origBottom - 2 && Math.min(x1, u.ox1) - Math.max(x0, u.ox0) > 0.25 * Math.min(x1 - x0, u.ox1 - u.ox0);
+          for (const u of users) { let sh = 0; for (const j of srcs) if (j !== u && g.get(j) && hits(u.origTop, u.ox0, u.ox1, j)) sh += g.get(j); const d = sh - (u.shift || 0); if (d) { u.base0 += d; u.shift = sh; relayout(u, e); } }
+          const added = []; body.forEach((b, i) => { if (covered(e, b)) return; let sh = 0; for (const j of srcs) if (g.get(j) && hits(b.top, b.x0, b.x1, j)) sh += g.get(j); if (!sh) return; const f = editFromBlock(e, b, 'fol:' + i); f.followOf = 1; f.fresh = false; f.base0 += sh; f.shift = sh; relayout(f, e); added.push(f); });
+          e.objs.push(...added);
+          // c. whatever no longer fits at the bottom of the page continues on the next page
+          const gy = x => x.base0 - x.size * 0.95, gh = x => (x.lines.length - 1) * lhOf(x) + x.size * 1.25, items = [...users, ...added, ...placed].filter(x => x.lines && x.lines.length).sort((p, q) => gy(p) - gy(q)); let spill = false, lastB = null;
+          for (const x of items) {
+            const lh = lhOf(x), n = x.lines.length; let k = n;
+            if (spill) k = 0; else if (gy(x) + gh(x) > limit + 2) { k = 0; for (let i = 0; i < n; i++) if (x.base0 + i * lh + x.size * 0.3 <= limit + 2) k = i + 1; spill = true; }
+            if (k < n) { x.flowK = k; const rest = x.lines.slice(k).join('\n'); if (rest.trim()) { const gap = lastB == null ? 0 : gy(x) - lastB; carry.push({ text: rest, gap: k === 0 ? gap : 0, proto: { fam: x.fam, bold: x.bold, italic: x.italic, underline: x.underline, size: x.size, color: x.color, align: x.align, hs: x.hs || 1, lineH: x.lineH, x0: x.x0, maxW: x.maxW || 0 } }); } }
+            lastB = gy(x) + gh(x);
+          }
+          if (carry.length) { // make sure there is a next page
+            let ni = pi + 1; while (ni < S.order.length && (!E(S.order[ni]) || E(S.order[ni]).deleted)) ni++;
+            if (ni >= S.order.length) { const id = 'f' + (S.nid++); S.ents.set(id, { id, src: null, auto: true, w: e.w, h: e.h, view: [0, 0, e.w, e.h], baseRot: 0, rot: 0, deleted: false, objs: [], text: null }); S.order.push(id); structural = true; }
+            else if (E(S.order[ni]).auto === undefined && E(S.order[ni]).src == null && false) { /* unreachable */ }
+            if (carry.length) toast = true;
+          }
+        }
+        if (structural) { buildPages(); }
+        if (toast) status.textContent = 'Text flowed onto the next page, like in Word. Undo (↶) restores it.';
       }
       function blocksOf(e) { if (!e.text) return []; return S.gran === 'line' ? e.text.lines.map(Core.lineAsBlock) : e.text.blocks; }
       function covered(e, blk) { return e.objs.some(o => o.type === 'edit' && blk.lines.some(l => o.items.some(it => Math.abs(it.y - l.y) < 1 && it.x >= l.x0 - 1 && it.x <= l.x1 + 1))); }
 
       /* paints over the old text using the page's own background (row by row), instead of a flat white box */
+      const patchRect = o => o.origBottom != null ? { x: o.ox0, y: o.origTop, w: o.ox1 - o.ox0, h: o.origBottom - o.origTop } : { x: o.x, y: o.y, w: o.w, h: o.h };
       function patchCanvas(e, o) {
-        const c = e.canvas; if (!c || !o.items) return null; const k = e.csc || 1, x0 = Math.max(4, Math.floor((o.x - 1) * k)), y0 = Math.max(0, Math.floor((o.y - 1) * k)), w = Math.min(c.width - x0 - 4, Math.ceil((o.w + 2) * k)), hh = Math.min(c.height - y0, Math.ceil((o.h + 2) * k)); if (w < 2 || hh < 2) return null;
+        const c = e.canvas; if (!c || !o.items) return null; const po = patchRect(o), k = e.csc || 1, x0 = Math.max(4, Math.floor((po.x - 1) * k)), y0 = Math.max(0, Math.floor((po.y - 1) * k)), w = Math.min(c.width - x0 - 4, Math.ceil((po.w + 2) * k)), hh = Math.min(c.height - y0, Math.ceil((po.h + 2) * k)); if (w < 2 || hh < 2) return null;
         let L, R; try { const g = c.getContext('2d'); L = g.getImageData(x0 - 4, y0, 1, hh).data; R = g.getImageData(Math.min(c.width - 1, x0 + w + 3), y0, 1, hh).data; } catch (_) { return null; }
         const out = h('canvas'); out.width = w; out.height = hh; const g2 = out.getContext('2d'); const col = (a, r) => [a[r * 4], a[r * 4 + 1], a[r * 4 + 2]], dist = (p, q) => Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1]) + Math.abs(p[2] - q[2]);
         const image = g2.createImageData(w, hh), px = image.data;
@@ -219,8 +304,8 @@
         const svg = (inner, vb) => h('div', { html: '<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="' + vb + '" style="overflow:visible;position:absolute;left:0;top:0" preserveAspectRatio="none">' + inner + '</svg>' });
         switch (o.type) {
           case 'edit': case 'text': {
-            if (o.type === 'edit') { const pc = patchCanvas(e, o); if (pc) { pc.style.cssText = 'position:absolute;pointer-events:none;left:' + (-1 * z) + 'px;top:' + (-1 * z) + 'px;width:' + ((o.w + 2) * z) + 'px;height:' + ((o.h + 2) * z) + 'px'; el.append(pc); } else if (o.bg) el.style.background = o.bg; } if (o.type === 'text') el.style.minWidth = '12px';
-            const lines = o.lines || [], boxW = o.maxW || Math.max(...lines.map(s => (S.metrics.width(s, o.fam, o.bold, o.italic, o.size) || 0) * (o.hs || 1)), 0);
+            if (o.type === 'edit') { const pc = patchCanvas(e, o); if (pc) { const po = patchRect(o); pc.style.cssText = 'position:absolute;pointer-events:none;left:' + ((po.x - 1 - b.x) * z) + 'px;top:' + ((po.y - 1 - b.y) * z) + 'px;width:' + ((po.w + 2) * z) + 'px;height:' + ((po.h + 2) * z) + 'px'; el.append(pc); } else if (o.bg) el.style.background = o.bg; } if (o.type === 'text') el.style.minWidth = '12px';
+            const lines = o.flowK != null ? (o.lines || []).slice(0, o.flowK) : (o.lines || []), boxW = o.maxW || Math.max(...lines.map(s => (S.metrics.width(s, o.fam, o.bold, o.italic, o.size) || 0) * (o.hs || 1)), 0);
             lines.forEach((s, i) => { const w = (S.metrics.width(s, o.fam, o.bold, o.italic, o.size) || 0) * (o.hs || 1); let x = o.x0 - o.x; if (o.align === 'center') x += (boxW - w) / 2; else if (o.align === 'right') x += boxW - w;
               el.append(h('div', { class: 'ln', style: { left: x * z + 'px', top: (o.base0 + i * o.lineH - o.size * CSS_BASE - o.y) * z + 'px', fontFamily: Core.CSSFONT[o.fam], fontSize: o.size * z + 'px', fontWeight: Core.resolveStyle(o.fam, o.bold, o.italic).includes('b') ? 700 : 400, fontStyle: Core.resolveStyle(o.fam, o.bold, o.italic).includes('i') ? 'italic' : 'normal', color: o.color, textDecoration: o.underline ? 'underline' : 'none', transform: o.hs && o.hs !== 1 ? 'scaleX(' + o.hs + ')' : '', transformOrigin: 'left top', opacity: editing && editing.o === o ? 0 : 1 } }, s)); });
             break; }
@@ -246,7 +331,8 @@
       function refreshLayer(id) {
         const e = E(id), pe = pageEls.get(id); if (!pe) return; const z = S.z, keepTa = editing && editing.e.id === id ? editing.ta : null; pe.layer.replaceChildren();
         if ((S.tool === 'edit' || S.showAll) && e.text) blocksOf(e).forEach((b, bi) => { if (covered(e, b)) return; pe.layer.append(h('div', { class: 'tb-box' + (S.showAll ? ' all' : ''), 'data-bi': bi, style: { left: (b.x0 - 2) * z + 'px', top: (b.top - 1) * z + 'px', width: (b.x1 - b.x0 + 4) * z + 'px', height: (b.bottom - b.top + 2) * z + 'px' } })); });
-        e.objs.forEach(o => pe.layer.append(objEl(o, e)));
+        if ((S.tool === 'edit' || S.tool === 'select') && e.imgs) e.imgs.forEach(im => { if (e.objs.some(o => o.type === 'hideimg' && o.idx === im.k)) return; pe.layer.append(h('div', { class: 'tb-box imgbox', 'data-ii': im.k, title: 'Picture: tap to move, resize, replace or delete', style: { left: im.x * z + 'px', top: im.y * z + 'px', width: im.w * z + 'px', height: im.h * z + 'px' } })); });
+        e.objs.forEach(o => { if (o.type !== 'hideimg') pe.layer.append(objEl(o, e)); });
         if (keepTa) pe.layer.append(keepTa);
       }
       const refreshAll = () => live().forEach(e => refreshLayer(e.id));
@@ -296,7 +382,7 @@
           ...['left', 'center', 'right'].map(a => tgl({ left: '⇤', center: '↔', right: '⇥' }[a], (o && TEXTY(o) ? o.align : st.align) === a, () => setStyle('align', a), 'Align ' + a)));
         if (TEXTY(o) || (!o && (S.tool === 'edit' || S.tool === 'text'))) {
           textUI();
-          if (!o && S.tool === 'edit') kids.push(h('span', { class: 'sep', style: { width: '1px', alignSelf: 'stretch', background: 'var(--line)' } }), lbl('Edit by'), h('select', { onchange: ev => { S.gran = ev.target.value; refreshAll(); } }, [['block', 'Paragraph'], ['line', 'Single line']].map(([v, n]) => h('option', { value: v, selected: S.gran === v }, n))), ui.check('Show all text', S.showAll, ev => { S.showAll = ev.target.checked; setTool(S.tool); }));
+          if (!o && S.tool === 'edit') kids.push(h('span', { class: 'sep', style: { width: '1px', alignSelf: 'stretch', background: 'var(--line)' } }), lbl('Edit by'), h('select', { onchange: ev => { S.gran = ev.target.value; refreshAll(); } }, [['block', 'Paragraph'], ['line', 'Single line']].map(([v, n]) => h('option', { value: v, selected: S.gran === v }, n))), ui.check('Show all text', S.showAll, ev => { S.showAll = ev.target.checked; setTool(S.tool); }), ui.check('Push text below', S.reflow, ev => { S.reflow = ev.target.checked; }));
         } else if (['rect', 'ellipse', 'line', 'arrow', 'draw', 'underline', 'strike'].includes(t)) {
           kids.push(lbl('Colour'), colorIn(o ? (o.stroke || o.color) : st.stroke, v => setStyle('stroke', v), 'Colour'), lbl('Width'), numIn(o ? (o.sw ?? 2) : st.sw, v => setStyle('sw', v), 0.5, 30, 0.5));
           if (t === 'rect' || t === 'ellipse') kids.push(lbl('Fill'), h('select', { onchange: ev => setStyle('fill', ev.target.value) }, [['', 'None'], ['#ffffff', 'White'], ['#fff3a3', 'Yellow'], ['#c8f7c5', 'Green'], ['#ffd1dc', 'Pink'], ['#cfe3ff', 'Blue'], ['#000000', 'Black']].map(([v, n]) => h('option', { value: v, selected: (o ? o.fill || '' : st.fill) === v }, n))));
@@ -305,11 +391,12 @@
         else if (t === 'redact') kids.push(h('span', { class: 'muted' }, 'Redaction removes the text underneath for real (not just hidden). Check the result.'));
         else if (t === 'link') kids.push(h('span', { class: 'muted' }, 'After you drag, you will be asked for a web address or a page number.'));
         else kids.push(h('span', { class: 'muted' }, 'Choose a tool above. Tap 👆 Select to move or resize things.'));
+        if (o && o.type === 'image') kids.push(ui.btn('🔄 Replace image', () => replaceImage(o), 'sm'));
         if (o) kids.push(h('span', { class: 'sep', style: { width: '1px', alignSelf: 'stretch', background: 'var(--line)' } }), ui.btn('Duplicate', () => dupObj(o), 'sm'), ui.btn('🗑 Delete', () => delObj(o.id), 'sm'));
         opts.replaceChildren(...kids);
       }
       function dupObj(o) { const f = find(o.id); if (!f) return; pushUndo(); const c = JSON.parse(JSON.stringify(o)); c.id = uid(); const d = 14; if (c.x != null) c.x += d; if (c.y != null) c.y += d; if (c.x0 != null) c.x0 += d; if (c.base0 != null) c.base0 += d; if (c.x1 != null) { c.x1 += d; c.x2 += d; c.y1 += d; c.y2 += d; } if (c.pts) c.pts = c.pts.map(p => [p[0] + d, p[1] + d]); if (c.type === 'edit') { c.type = 'text'; delete c.items; delete c.key; c.bg = null; } f.e.objs.push(c); S.sel = { oid: c.id }; refreshLayer(f.e.id); renderOpts(); useFont(c, f.e); }
-      function delObj(oid) { const f = find(oid); if (!f) return; pushUndo(); f.e.objs = f.e.objs.filter(x => x.id !== oid); S.sel = null; refreshLayer(f.e.id); renderOpts(); }
+      function delObj(oid) { const f = find(oid); if (!f) return; pushUndo(); f.e.objs = f.e.objs.filter(x => x.id !== oid); S.sel = null; refreshLayer(f.e.id); renderOpts(); reflowAll(); }
 
       /* ───────── pointer handling ───────── */
       function pt(ev, layer) { const r = layer.getBoundingClientRect(); return [(ev.clientX - r.left) / S.z, (ev.clientY - r.top) / S.z]; }
@@ -319,6 +406,7 @@
         if (editing) closeEditor();
         if (tEl && ev.target.dataset.del) { delObj(tEl.dataset.oid); ev.preventDefault(); return; }
         if (tEl && (S.tool === 'select' || S.tool === 'edit' || S.tool === 'text' || ev.target.dataset.rh || (S.sel && S.sel.oid === tEl.dataset.oid))) { objDown(ev, e, layer, tEl); return; }
+        if (isBox && isBox.classList.contains('imgbox') && (S.tool === 'edit' || S.tool === 'select')) { ev.preventDefault(); liftImage(e, +isBox.dataset.ii); return; }
         if (S.tool === 'edit' && isBox) { const blk = blocksOf(e)[+isBox.dataset.bi]; if (blk) { ev.preventDefault(); const key = S.gran + ':' + isBox.dataset.bi; pushUndo(); const o = editFromBlock(e, blk, key); e.objs.push(o); S.sel = { oid: o.id }; refreshLayer(e.id); renderOpts(); openEditor(e, o); } return; }
         if (S.tool === 'text') { ev.preventDefault(); const [x, y] = pt(ev, layer); pushUndo(); const o = newText(e, x, y - S.sty.size * 0.6); e.objs.push(o); S.sel = { oid: o.id }; refreshLayer(e.id); renderOpts(); openEditor(e, o); return; }
         if (S.tool === 'select' || S.tool === 'edit') { if (S.sel) { S.sel = null; refreshAll(); renderOpts(); } return; }
@@ -366,13 +454,17 @@
 
       /* ───────── inline text editor ───────── */
       function openEditor(e, o) {
-        closeEditor(); const pe = pageEls.get(e.id); if (!pe) return; const z = S.z, ww = o.maxW || Math.max(120, o.w, e.w - o.x0 - 6);
-        const ta = h('textarea', { class: 'ped-editor', spellcheck: 'true', rows: Math.max(1, (o.text.match(/\n/g) || []).length + 1), style: { left: (o.x0 - 3) * z + 'px', top: (o.base0 - o.size * CSS_BASE - 3) * z + 'px', width: Math.max(ww * z + 12, 90) + 'px', fontFamily: Core.CSSFONT[o.fam], fontSize: o.size * z + 'px', lineHeight: o.lineH * z + 'px', fontWeight: Core.resolveStyle(o.fam, o.bold, o.italic).includes('b') ? 700 : 400, fontStyle: Core.resolveStyle(o.fam, o.bold, o.italic).includes('i') ? 'italic' : 'normal', color: o.color || '#111111', background: o.bg || '#ffffff', '--ped-bg': o.bg || '#ffffff', '--ped-ink': o.color || '#111111', textAlign: o.align, resize: 'none', overflow: 'hidden' } });
-        ta.value = o.text; const fit = () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; }; ta.addEventListener('input', fit);
+        closeEditor(); const pe = pageEls.get(e.id); if (!pe) return; const z = S.z, fit1 = o.type === 'edit' && (o.origLines || 1) === 1 && !o.maxW0, boxW = o.maxW || o.w, ww = o.maxW || Math.max(120, o.w, e.w - o.x0 - 6);
+        const sty = Core.resolveStyle(o.fam, o.bold, o.italic), ta = h('textarea', { class: 'ped-editor', spellcheck: 'true', wrap: fit1 ? 'off' : 'soft', rows: 1, style: { top: (o.base0 - o.size * CSS_BASE) * z + 'px', fontFamily: Core.CSSFONT[o.fam], fontSize: o.size * z + 'px', lineHeight: o.lineH * z + 'px', fontWeight: sty.includes('b') ? 700 : 400, fontStyle: sty.includes('i') ? 'italic' : 'normal', '--ped-ink': o.color || '#111111', textAlign: o.align, resize: 'none', overflow: 'hidden', whiteSpace: fit1 ? 'pre' : 'pre-wrap' } });
+        ta.value = o.text;
+        // the box hugs the text and stays anchored the way the text is aligned (left / centre / right), like typing straight on the page
+        const ax = o.align === 'center' ? o.x0 + boxW / 2 : o.align === 'right' ? o.x0 + boxW : o.x0;
+        const fit = () => { ta.style.height = 'auto'; if (fit1 || o.type === 'text') { ta.style.width = '1px'; const w = Math.max(ta.scrollWidth + 6, 24), wp = w / z, left = o.align === 'center' ? ax - wp / 2 : o.align === 'right' ? ax - wp : o.x0; ta.style.width = w + 'px'; ta.style.left = left * z + 'px'; } else { ta.style.width = ww * z + 'px'; ta.style.left = o.x0 * z + 'px'; } ta.style.height = ta.scrollHeight + 'px'; };
+        ta.addEventListener('input', fit);
         ta.addEventListener('keydown', ev => { if (ev.key === 'Escape') { ev.preventDefault(); closeEditor(true); } else if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); closeEditor(); } });
         ta.addEventListener('blur', () => setTimeout(() => { if (editing && editing.ta === ta) closeEditor(); }, 120));
         pe.layer.append(ta); editing = { e, o, ta }; const old = pe.layer.querySelector('[data-oid="' + o.id + '"]'); if (old) old.querySelectorAll('.ln').forEach(n => n.style.opacity = 0);
-        fit(); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); status.textContent = 'Typing… tap outside to finish. Ctrl+Enter also finishes.';
+        fit(); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); status.textContent = 'Typing in place… tap outside to finish (Ctrl+Enter also finishes).';
       }
       function closeEditor(cancel) {
         if (!editing) return; const { e, o, ta } = editing; editing = null; const txt = ta.value; ta.remove();
@@ -381,7 +473,7 @@
         if (o.type === 'text' && !txt.trim()) { e.objs = e.objs.filter(x => x !== o); S.sel = null; if (o.fresh) { S.undo.pop(); syncBtns(); } }
         else if (o.fresh && txt === o.text && o.type === 'edit') { e.objs = e.objs.filter(x => x !== o); S.undo.pop(); syncBtns(); S.sel = null; }
         else if (o.type === 'text' && o.fresh) o.fresh = false;
-        relayout(o, e); refreshLayer(e.id); renderOpts(); status.textContent = 'Edited. Keep going, or tap ⬇ Download when you are done.';
+        relayout(o, e); refreshLayer(e.id); renderOpts(); status.textContent = 'Edited. Keep going, or tap ⬇ Download when you are done.'; reflowAll();
       }
 
       /* ───────── images & signature ───────── */
