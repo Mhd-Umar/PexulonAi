@@ -1,4 +1,4 @@
-/* ToolNest QR encoder — byte mode, versions 1-10, ECC L/M/Q/H. Works in browser (window.TNQR) and Node. */
+/* Pexulon AI QR encoder — byte mode, versions 1-10, ECC L/M/Q/H. Works in browser (window.TNQR) and Node. */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.TNQR = factory();

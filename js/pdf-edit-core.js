@@ -1,4 +1,4 @@
-/* ToolNest PDF editing core — no DOM. Works in the browser (window.PedCore) and in Node (module.exports).
+/* Pexulon AI PDF editing core — no DOM. Works in the browser (window.PedCore) and in Node (module.exports).
    Contains: font matching, text layout, line/paragraph grouping, coordinate mapping, export engine. */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -85,8 +85,8 @@
     return { upem, bbox, asc, desc, italicAngle, cap, gid, adv, numGlyphs: ng };
   };
   // embed a whole (pre-subset) TrueType file as a Type0 / CIDFontType2 / Identity-H font. Call finish() before saving.
-  C.embedTTF = function (PL, doc, parsed, bytes, psName, flagsItalic) {
-    const ctx = doc.context, sc = 1000 / parsed.upem, used = new Map();
+  C.embedTTF = function (PL, doc, parsed, bytes, psName, flagsItalic, ghost) {
+    const ctx = doc.context, sc = 1000 / parsed.upem, used = new Map(), gmap = new Map(); let gn = 0; // ghost: invisible text layer; codes are synthetic and ToUnicode gives the real characters
     const ffRef = ctx.register(ctx.flateStream(bytes, { Length1: bytes.length }));
     const descRef = ctx.register(ctx.obj({ Type: 'FontDescriptor', FontName: psName, Flags: 32 | (flagsItalic ? 64 : 0), FontBBox: parsed.bbox.map(v => Math.round(v * sc)), ItalicAngle: Math.round(parsed.italicAngle), Ascent: Math.round(parsed.asc * sc), Descent: Math.round(parsed.desc * sc), CapHeight: Math.round(parsed.cap * sc), StemV: 80, FontFile2: ffRef }));
     const cid = ctx.obj({ Type: 'Font', Subtype: 'CIDFontType2', BaseFont: psName, CIDSystemInfo: { Registry: PL.PDFString.of('Adobe'), Ordering: PL.PDFString.of('Identity'), Supplement: 0 }, FontDescriptor: descRef, DW: 1000, CIDToGIDMap: 'Identity' }), cidRef = ctx.register(cid);
@@ -94,7 +94,7 @@
     const hex4 = n => n.toString(16).padStart(4, '0');
     return {
       name: psName, ref,
-      encodeText(text) { let h = ''; for (const ch of String(text)) { const cp = ch.codePointAt(0), g = parsed.gid(cp); h += hex4(g); if (g) used.set(g, cp); } return PL.PDFHexString.of(h); },
+      encodeText(text) { let h = ''; for (const ch of String(text)) { const cp = ch.codePointAt(0); let g; if (ghost) { g = gmap.get(cp); if (!g) { g = gn < parsed.numGlyphs - 1 ? ++gn : 1; gmap.set(cp, g); } } else g = parsed.gid(cp); h += hex4(g); if (g) used.set(g, cp); } return PL.PDFHexString.of(h); },
       finish() {
         if (!used.size) return; const gs = [...used.keys()].sort((a, b) => a - b), W = []; gs.forEach(g => { W.push(g, [Math.round(parsed.adv(g) * sc)]); }); cid.set(PL.PDFName.of('W'), ctx.obj(W));
         let cm = '/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /Adobe-Identity-UCS def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange\n';
@@ -249,7 +249,15 @@
       if (!encodable) {
         if (!env.textImage) throw new Error('This text contains characters the standard PDF fonts cannot draw.');
         const img = await env.textImage(lines, { fam: o.fam, bold: o.bold, italic: o.italic, size: o.size, color: o.color, lineH: lh, align: o.align, width: Math.max(o.maxW || 0, ...lines.map(l => wOf(l))), hs }); report.imageText++;
-        const embedded = await doc.embedPng(img.png), x0 = o.x0 ?? o.x, top = (o.base0 ?? (o.y + o.size)) - o.size * 0.95; const bl = map(x0, top + img.h / img.scale); page.drawImage(embedded, { x: bl[0], y: bl[1], width: img.w / img.scale, height: img.h / img.scale, rotate: PL.degrees(rot) }); return;
+        const embedded = await doc.embedPng(img.png), x0 = o.x0 ?? o.x, top = (o.base0 ?? (o.y + o.size)) - o.size * 0.95; const bl = map(x0, top + img.h / img.scale); page.drawImage(embedded, { x: bl[0], y: bl[1], width: img.w / img.scale, height: img.h / img.scale, rotate: PL.degrees(rot) });
+        // invisible real-text layer on top of the picture: selectable, searchable and copyable as the correct Unicode text
+        try { if (env.fontBytes && PL.setTextRenderingMode && PL.TextRenderingMode) {
+          if (!fontCache.has('ghost')) { if (env.ensureFont) await env.ensureFont('dejavusans', false, false); const gb = await env.fontBytes('dejavusans', false, false), gp = C.parseTTF(gb), gf = C.embedTTF(PL, doc, gp, gb, 'Ped-text-layer', false, true); customFonts.push(gf); fontCache.set('ghost', gf); }
+          const gf = fontCache.get('ghost'), gkey = page.node.newFontDictionary(gf.name, gf.ref), rad2 = rot * Math.PI / 180, gboxW = o.maxW || Math.max(...lines.map(wOf)), gleft = x0;
+          lines.forEach((ln, i) => { if (!ln) return; const w2 = wOf(ln); let gx = gleft; if (o.align === 'center') gx = gleft + (gboxW - w2) / 2; else if (o.align === 'right') gx = gleft + gboxW - w2; const gp2 = map(gx, (o.base0 ?? (o.y + o.size)) + i * lh), cs2 = page.getContentStream();
+            cs2.push(PL.pushGraphicsState(), PL.beginText(), PL.setTextRenderingMode(PL.TextRenderingMode.Invisible), PL.setFontAndSize(gkey, o.size), PL.rotateAndSkewTextRadiansAndTranslate(rad2, 0, 0, gp2[0], gp2[1]), PL.showText(gf.encodeText(ln)), PL.endText(), PL.popGraphicsState()); });
+        } } catch (err) { if (typeof console !== 'undefined') console.warn('text layer skipped', err); }
+        return;
       }
       const font = await getFont(fam, o.bold, o.italic), key = page.node.newFontDictionary(font.name, font.ref), col = PL.rgb(...C.hex(o.color, [0, 0, 0])), rad = rot * Math.PI / 180;
       const boxW = o.maxW || Math.max(...lines.map(wOf)), left = o.x0 ?? o.x;
@@ -406,13 +414,33 @@
             let pre = ''; if (o.op === "'" || o.op === '"') { if (o.op === '"') { Tw = nums[0] || 0; Tc = nums[1] || 0; pre = fmt(Tw) + ' Tw ' + fmt(Tc) + ' Tc '; } Tlm = mul([1, 0, 0, 1, 0, -TL], Tlm); Tm = Tlm.slice(); exact = true; pre += 'T* '; }
             const pos = origin(), { adv, known } = advanceOf(o.op, a), sc = pos.sc;
             const ux = pos.m[0], uy = pos.m[1]; const len = Math.hypot(ux, uy) || 1; const dx = ux / len, dy = uy / len;
+            // glyph-level removal: only the glyphs lying inside a target are dropped; neighbours stay in place
             let hit = false;
-            if (exact && known) {
-              if (rr) { const ex = pos.x + dx * adv * sc, ey = pos.y + dy * adv * sc, cx = (pos.x + ex) / 2, cy = (pos.y + ey) / 2 + fsz * sc * 0.3; if (cx >= rr.x0 && cx <= rr.x1 && cy >= rr.y0 && cy <= rr.y1) hit = true; }
-              else for (let t = 0; t < targets.length; t++) { const T = targets[t]; const ddx = pos.x - T.x, ddy = pos.y - T.y, along = ddx * dirx + ddy * diry, across = -ddx * diry + ddy * dirx, tol = 0.4 * (T.fs || 10), runLen = adv * sc;
-                if (Math.abs(across) <= tol && along >= -1.5 && along + runLen <= T.w + Math.max(2, 0.25 * (T.fs || 10)) && along <= T.w + 1) { hit = true; done[t] += Math.max(0, runLen); if (!hits[t] && Tr !== 3) hits[t] = fill; break; } }
+            if (exact && known && font && fsz && Th) {
+              const strs = o.op === 'TJ' ? a[0].v : [a[a.length - 1]], items = []; let cum = 0, any = false;
+              for (const it of strs) {
+                if (it.t === 'num') { items.push({ n: it.v }); cum -= it.v / 1000 * fsz * Th; continue; } if (it.t !== 'str') continue; const bs = it.v, step = font.bytes === 2 ? 2 : 1;
+                for (let k = 0; k + step - 1 < bs.length; k += step) {
+                  const code = step === 2 ? ((bs[k] << 8) | bs[k + 1]) : bs[k], g = (font.w(code) / 1000 * fsz + Tc + (step === 1 && code === 32 ? Tw : 0)) * Th, s0 = cum, mid = cum + g / 2; cum += g;
+                  const gx = pos.x + dx * mid * sc, gy = pos.y + dy * mid * sc; let gh = false;
+                  if (rr) { const cy = gy + fsz * sc * 0.3; gh = gx >= rr.x0 && gx <= rr.x1 && cy >= rr.y0 && cy <= rr.y1; }
+                  else for (let t = 0; t < targets.length; t++) { const T = targets[t], ddx = gx - T.x, ddy = gy - T.y, along = ddx * dirx + ddy * diry, across = -ddx * diry + ddy * dirx, tol = 0.45 * (T.fs || 10);
+                    if (Math.abs(across) <= tol && along >= -0.5 && along <= T.w + 0.5) { gh = true; done[t] += Math.abs(g * sc); if (!hits[t] && Tr !== 3) hits[t] = fill; break; } }
+                  if (gh) any = true; items.push({ b: Array.from(bs.slice ? bs.slice(k, k + step) : Array.prototype.slice.call(bs, k, k + step)), g, gh });
+                }
+              }
+              if (any) {
+                hit = true; st.hits++; if (Tr === 3) st.invisible++;
+                let out = '', buf = '', pend = 0; const flushNum = () => { if (pend) { out += fmt(pend) + ' '; pend = 0; } }, flushStr = () => { if (buf) { out += '<' + buf + '>'; buf = ''; } };
+                for (const it of items) {
+                  if (it.n !== undefined) { if (buf) flushStr(); pend += it.n; }
+                  else if (it.gh) { if (buf) flushStr(); pend += -it.g / (fsz * Th) * 1000; }
+                  else { if (!buf) flushNum(); buf += it.b.map(v => v.toString(16).padStart(2, '0')).join(''); }
+                }
+                flushStr(); flushNum();
+                edits.push({ start: o.start, end: o.end, repl: pre + '[' + out.trim() + '] TJ' });
+              }
             }
-            if (hit) { st.hits++; if (Tr === 3) st.invisible++; const adj = fsz && Th ? -adv / (fsz * Th) * 1000 : 0; edits.push({ start: o.start, end: o.end, repl: pre + '[' + fmt(adj) + '] TJ' }); }
             if (known) { Tm = mul([1, 0, 0, 1, adv, 0], Tm); } else exact = false;
             break; }
           default: break;

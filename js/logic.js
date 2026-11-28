@@ -1,4 +1,4 @@
-/* ToolNest logic library — pure functions, no DOM. Works in browser (window.TNLogic) and Node (module.exports). */
+/* Pexulon AI logic library — pure functions, no DOM. Works in browser (window.TNLogic) and Node (module.exports). */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.TNLogic = factory();

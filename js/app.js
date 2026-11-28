@@ -1,8 +1,8 @@
-/* ToolNest core: registry, router, UI helpers, lazy libraries, AI client */
+/* Pexulon AI core: registry, router, UI helpers, lazy libraries, AI client */
 (function () {
   'use strict';
   const TN = window.TN = { tools: [], byId: {}, ui: {}, libs: {}, ai: {} };
-  const SITE = 'ToolNest';
+  const SITE = 'Pexulon AI';
 
   TN.cats = [
     { id: 'ai', name: 'AI Studio', icon: '✨', tint: '#e3e0fb', blurb: 'Free AI helpers' },
@@ -167,9 +167,9 @@
       return (data.choices?.[0]?.message?.content || '').trim();
     }
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 11500);
+    const timer = setTimeout(() => controller.abort(), 100000);
     try {
-      res = await fetch(window.TN_AI_URL || '/api/ai', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ system, messages: messages.slice(-8).map(m => ({ role: m.role, content: String(m.content || '').slice(-12000) })), maxTokens: Math.min(maxTokens, 1100), temperature, fast }), signal: controller.signal });
+      res = await fetch(window.TN_AI_URL || '/api/ai', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ system, messages: messages.slice(-12).map(m => ({ role: m.role, content: String(m.content || '').slice(-450000) })), maxTokens: Math.min(maxTokens, 8192), temperature, fast }), signal: controller.signal });
     } catch (e) {
       if (e && e.name === 'AbortError') throw new Error('AI request took too long. Please try a shorter question or try again shortly.');
       throw new Error('Could not reach the AI service. Check your internet connection.');
@@ -194,12 +194,12 @@
       return answer;
     }
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 35000);
+    const timer = setTimeout(() => controller.abort(), 180000);
     let response, full = '';
     try {
       response = await fetch('/api/ai-stream', {
         method: 'POST', headers: { 'content-type': 'application/json', 'accept': 'text/event-stream' },
-        body: JSON.stringify({ system, messages: input.slice(-12).map(m => ({ role: m.role, content: String(m.content || '').slice(-12000) })), maxTokens: Math.min(maxTokens, 2500), temperature }),
+        body: JSON.stringify({ system, messages: input.slice(-16).map(m => ({ role: m.role, content: String(m.content || '').slice(-450000) })), maxTokens: Math.min(maxTokens, 8192), temperature }),
         signal: controller.signal
       });
       if (!response.ok || !response.body) {
@@ -367,8 +367,8 @@
 
   function showAbout() {
     document.body.classList.remove('editor-mode'); document.title = 'About — ' + SITE;
-    app().replaceChildren(h('div', { class: 'wrap' }, h('nav', { class: 'crumbs' }, h('a', { href: '#/' }, 'All tools'), '›', 'About'), h('div', { class: 'thead' }, h('div', { class: 'ticon' }, 'ℹ️'), h('div', {}, h('h1', {}, 'About ToolNest'))),
-      ui.panel('', h('p', {}, 'ToolNest is a free toolbox that runs in your browser. PDF, image, text, calculator and developer tools process your files on your own device — nothing is uploaded to a server.'),
+    app().replaceChildren(h('div', { class: 'wrap' }, h('nav', { class: 'crumbs' }, h('a', { href: '#/' }, 'All tools'), '›', 'About'), h('div', { class: 'thead' }, h('div', { class: 'ticon' }, 'ℹ️'), h('div', {}, h('h1', {}, 'About Pexulon AI'))),
+      ui.panel('', h('p', {}, 'Pexulon AI is a free toolbox that runs in your browser. PDF, image, text, calculator and developer tools process your files on your own device — nothing is uploaded to a server.'),
         h('p', {}, 'AI tools are the one exception: they send the text you type to a free AI provider so it can answer. They are labelled with ✨ and are optional.'),
         h('h3', { style: { marginTop: '14px' } }, 'Open-source parts'),
         h('p', {}, 'PDF editing uses pdf-lib (MIT) and PDF.js (Apache-2.0). ZIP files use JSZip (MIT). Markdown preview uses marked (MIT). The QR code encoder is written from the QR specification and tested against a decoder.'))));
@@ -385,7 +385,7 @@
     const themeBtn = h('button', { class: 'icon-btn', 'aria-label': 'Toggle theme', title: 'Light / dark', onclick: () => { const dark = getComputedStyle(document.documentElement).colorScheme === 'dark'; TN.store.set('theme', dark ? 'light' : 'dark'); applyTheme(); } }, '🌓');
     const install = h('button', { class: 'icon-btn', style: { display: 'none' }, title: 'Install app', onclick: async () => { if (deferredInstall) { deferredInstall.prompt(); await deferredInstall.userChoice; deferredInstall = null; install.style.display = 'none'; } } }, '⬇ Install');
     window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; install.style.display = ''; });
-    $('#topbar').replaceChildren(h('div', { class: 'wrap' }, h('a', { class: 'brand', href: '#/' }, h('span', { class: 'brand-mark' }, '⌂'), SITE), h('span', { class: 'spacer' }), install, h('a', { class: 'icon-btn', href: '#/settings', 'aria-label': 'Settings', title: 'Settings' }, '⚙'), themeBtn));
+    $('#topbar').replaceChildren(h('div', { class: 'wrap' }, h('a', { class: 'brand', href: '#/' }, h('span', { class: 'brand-mark' }, 'P'), SITE), h('span', { class: 'spacer' }), install, h('a', { class: 'icon-btn', href: '#/settings', 'aria-label': 'Settings', title: 'Settings' }, '⚙'), themeBtn));
     $('#footer').replaceChildren(h('div', { class: 'wrap' }, h('span', {}, '© ' + new Date().getFullYear() + ' ' + SITE + ' · Free tools, no sign-up'), h('span', {}, h('a', { href: '#/about' }, 'About & privacy'), ' · ', h('a', { href: '#/settings' }, 'Settings'))));
     document.addEventListener('keydown', e => { if (e.key === '/' && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName) && !document.activeElement.isContentEditable) { const s = $('.searchbox input'); if (s) { e.preventDefault(); s.focus(); } } });
   }
