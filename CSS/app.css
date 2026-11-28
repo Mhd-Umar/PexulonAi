@@ -471,3 +471,7 @@ footer { background: transparent; }
 .askbox { background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow); }
 .composer .btn:not(.primary) { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); box-shadow: none; }
 .btns .btn:not(.primary):not(.danger) { background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong); }
+.tb-box.imgbox { border-color: #0a9d73 !important; background: rgba(10,157,115,.06); }
+
+/* in-place editing: no box, no shadow - just a thin outline around the live text */
+textarea.ped-editor { background: transparent !important; border: 0 !important; outline: 1.5px solid rgba(91,61,245,.75) !important; outline-offset: 1px; border-radius: 2px; padding: 0 !important; box-shadow: none !important; caret-color: var(--ped-ink, #111); min-width: 24px; }
