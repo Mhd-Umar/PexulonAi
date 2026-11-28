@@ -15,7 +15,7 @@ export async function onRequestPost({ request, env }) {
   let upstream = null, lastStatus = 502, lastMessage = '';
   for (const model of modelList(env, true)) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30000);
+    const timer = setTimeout(() => controller.abort(), Math.min(28000, 9000 + raw.length / 20));
     try {
       upstream = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, {
         method: 'POST',
@@ -33,8 +33,7 @@ export async function onRequestPost({ request, env }) {
       if (![404, 500, 503].includes(upstream.status)) break;
     } catch (error) {
       clearTimeout(timer);
-      if (error?.name === 'AbortError') return json(504, { error: 'Gemini took too long to start streaming. Please try again.' });
-      return json(502, { error: 'Could not connect to Gemini. Check the Pages Function logs.' });
+      lastStatus = error?.name === 'AbortError' ? 504 : 502; lastMessage = error?.name === 'AbortError' ? 'model did not answer in time' : 'could not connect'; upstream = null; continue; // try the next model
     }
   }
   if (!upstream?.ok || !upstream.body) return json(lastStatus >= 500 ? 503 : 502, { error: `Gemini streaming error (${lastStatus})${lastMessage ? ': ' + lastMessage : ''}` });

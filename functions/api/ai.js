@@ -16,7 +16,7 @@ export async function onRequestPost({ request, env }) {
   let lastStatus = 502, lastMessage = '';
   for (const model of modelList(env, false)) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 60000);
+    const timer = setTimeout(() => controller.abort(), Math.min(70000, 25000 + raw.length / 8));
     try {
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
         method: 'POST',
@@ -35,8 +35,7 @@ export async function onRequestPost({ request, env }) {
       if (response.status === 429) return json(429, { error: 'Gemini free-tier quota is temporarily exhausted. Please wait and try again.' });
       if (![404, 500, 503].includes(response.status)) break;
     } catch (error) {
-      if (error?.name === 'AbortError') return json(504, { error: 'Gemini took too long to respond. Please try again.' });
-      return json(502, { error: 'Could not connect to Gemini. Check the Pages Function logs and try again.' });
+      lastStatus = error?.name === 'AbortError' ? 504 : 502; lastMessage = error?.name === 'AbortError' ? 'model did not answer in time' : 'could not connect'; continue; // try the next model
     } finally { clearTimeout(timer); }
   }
   return json(lastStatus >= 500 ? 503 : 502, { error: `Gemini service error (${lastStatus})${lastMessage ? ': ' + lastMessage : '. Check the API key, enabled API and model name.'}` });
