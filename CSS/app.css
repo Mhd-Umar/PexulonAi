@@ -475,3 +475,10 @@ footer { background: transparent; }
 
 /* in-place editing: no box, no shadow - just a thin outline around the live text */
 textarea.ped-editor { background: transparent !important; border: 0 !important; outline: 1.5px solid rgba(91,61,245,.75) !important; outline-offset: 1px; border-radius: 2px; padding: 0 !important; box-shadow: none !important; caret-color: var(--ped-ink, #111); min-width: 24px; }
+.snapg{position:absolute;background:#ff3d71;pointer-events:none;z-index:25;opacity:.85}
+
+/* search bar: icon and text share one centre line */
+.searchbox { display: flex; align-items: center; }
+.searchbox .mag { position: absolute; left: 18px; top: 50%; transform: translateY(-50%); width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 0; opacity: .65; color: var(--ink-2, #55607a); pointer-events: none; z-index: 1; }
+.searchbox input, .searchbox input[type=search] { padding: 0 16px 0 50px !important; line-height: normal; height: 54px; box-sizing: border-box; font-size: 16px; }
+.searchbox input::placeholder { text-overflow: ellipsis; }
