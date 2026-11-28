@@ -4,7 +4,7 @@
   const { h, ui } = TN, L = TNLogic;
 
   TN.register({ id: 'json', cat: 'dev', icon: '{ }', name: 'JSON Formatter & Validator', desc: 'Pretty-print, minify and validate JSON with error location.', tags: 'format beautify minify lint parse api', render(root) {
-    const ta = ui.area({ rows: 12, mono: true, value: '{"name":"ToolNest","tools":[1,2,3],"free":true}' }), out = ui.out(''), msg = h('div', { class: 'hint' }), indent = ui.select([[2, '2 spaces'], [4, '4 spaces'], ['\t', 'Tab']], 2);
+    const ta = ui.area({ rows: 12, mono: true, value: '{"name":"Pexulon AI","tools":[1,2,3],"free":true}' }), out = ui.out(''), msg = h('div', { class: 'hint' }), indent = ui.select([[2, '2 spaces'], [4, '4 spaces'], ['\t', 'Tab']], 2);
     const act = (fn) => { try { const o = JSON.parse(ta.value); const r = fn(o); out.set(r); msg.textContent = '✅ Valid JSON'; } catch (e) { const m = /position (\d+)/.exec(e.message); let w = e.message; if (m) { const p = +m[1], before = ta.value.slice(0, p); w += ` (line ${before.split('\n').length}, column ${p - before.lastIndexOf('\n')})`; } msg.textContent = '❌ ' + w; out.set(''); } };
     const sortKeys = o => Array.isArray(o) ? o.map(sortKeys) : o && typeof o === 'object' ? Object.fromEntries(Object.keys(o).sort().map(k => [k, sortKeys(o[k])])) : o;
     const ind = () => indent.value === '\t' ? '\t' : +indent.value;
