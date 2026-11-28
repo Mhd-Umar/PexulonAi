@@ -204,7 +204,7 @@
       });
       if (!response.ok || !response.body) {
         const detail = await response.json().catch(() => ({}));
-        if ([404, 501, 502, 503].includes(response.status)) {
+        if ([404, 501, 502, 503, 504].includes(response.status)) {
           const answer = await TN.ai.ask({ system, messages: input, maxTokens, temperature });
           onChunk(answer, answer); return answer;
         }
@@ -385,7 +385,7 @@
     const themeBtn = h('button', { class: 'icon-btn', 'aria-label': 'Toggle theme', title: 'Light / dark', onclick: () => { const dark = getComputedStyle(document.documentElement).colorScheme === 'dark'; TN.store.set('theme', dark ? 'light' : 'dark'); applyTheme(); } }, '🌓');
     const install = h('button', { class: 'icon-btn', style: { display: 'none' }, title: 'Install app', onclick: async () => { if (deferredInstall) { deferredInstall.prompt(); await deferredInstall.userChoice; deferredInstall = null; install.style.display = 'none'; } } }, '⬇ Install');
     window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; install.style.display = ''; });
-    $('#topbar').replaceChildren(h('div', { class: 'wrap' }, h('a', { class: 'brand', href: '#/' }, h('span', { class: 'brand-mark' }, 'P'), SITE), h('span', { class: 'spacer' }), install, h('a', { class: 'icon-btn', href: '#/settings', 'aria-label': 'Settings', title: 'Settings' }, '⚙'), themeBtn));
+    $('#topbar').replaceChildren(h('div', { class: 'wrap' }, h('a', { class: 'brand', href: '#/' }, h('img', { class: 'brand-mark', src: 'icons/icon.svg?v=3', alt: '', width: 32, height: 32 }), SITE), h('span', { class: 'spacer' }), install, h('a', { class: 'icon-btn', href: '#/settings', 'aria-label': 'Settings', title: 'Settings' }, '⚙'), themeBtn));
     $('#footer').replaceChildren(h('div', { class: 'wrap' }, h('span', {}, '© ' + new Date().getFullYear() + ' ' + SITE + ' · Free tools, no sign-up'), h('span', {}, h('a', { href: '#/about' }, 'About & privacy'), ' · ', h('a', { href: '#/settings' }, 'Settings'))));
     document.addEventListener('keydown', e => { if (e.key === '/' && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName) && !document.activeElement.isContentEditable) { const s = $('.searchbox input'); if (s) { e.preventDefault(); s.focus(); } } });
   }

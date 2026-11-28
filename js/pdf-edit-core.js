@@ -156,7 +156,7 @@
       for (let k = lines.length - 1; k >= 0 && k >= lines.length - 40; k--) {
         const l = lines[k], tol = 0.4 * Math.min(l.fs, it.fs);
         if (l.y < it.y - tol - 60) break;
-        if (Math.abs(l.y - it.y) <= tol && Math.abs(l.fs - it.fs) <= 0.3 * l.fs && it.x >= l.x0 - it.fs && it.x - l.x1 < 2.5 * it.fs) { target = l; break; }
+        if (Math.abs(l.y - it.y) <= tol && Math.abs(l.fs - it.fs) <= 0.3 * l.fs && it.x >= l.x0 - it.fs && it.x - l.x1 < 1.3 * it.fs) { target = l; break; }
       }
       if (target) { target.items.push(it); target.x1 = Math.max(target.x1, it.x + it.w); target.x0 = Math.min(target.x0, it.x); }
       else lines.push({ items: [it], x0: it.x, x1: it.x + it.w, y: it.y, fs: it.fs, asc: it.asc, desc: it.desc });
