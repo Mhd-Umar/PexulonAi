@@ -22,8 +22,8 @@ export function parseBody(body, maxMessages = 8, maxChars = 12000) {
   if (!messages.length) return { error: 'Please enter a message first.' };
   return {
     messages,
-    system: String(body.system || '').slice(0, 4000),
-    maxTokens: Math.min(Math.max(Number(body.maxTokens) || 900, 100), 2500),
+    system: String(body.system || '').slice(0, 8000),
+    maxTokens: Math.min(Math.max(Number(body.maxTokens) || 900, 100), 8192),
     temperature: Math.min(Math.max(Number(body.temperature) || 0.4, 0), 1.2)
   };
 }
@@ -37,6 +37,7 @@ export function modelList(env, streaming = false) {
 
 export function geminiPayload(input) {
   const generationConfig = { maxOutputTokens: input.maxTokens, temperature: input.temperature };
+  if (/gemini-2\.5-flash|flash-latest|flash-lite-latest/.test(input.model || '')) generationConfig.thinkingConfig = { thinkingBudget: 0 };
   return {
     ...(input.system ? { systemInstruction: { parts: [{ text: input.system }] } } : {}),
     contents: input.messages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
